@@ -1,0 +1,103 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 21,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Visual Studio 17 2022",
+      "binaryDir": "${sourceDir}/build-${presetName}",
+      "cacheVariables": {
+        "CMAKE_INSTALL_PREFIX": "${sourceDir}/install-${presetName}"
+      }
+    },
+    {
+      "name": "x64",
+      "displayName": "x64 Release",
+      "inherits": "base",
+      "architecture": {
+        "value": "x64",
+        "strategy": "set"
+      }
+    },
+    {
+      "name": "x64-debug",
+      "displayName": "x64 Debug",
+      "inherits": "x64",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "arm64",
+      "displayName": "ARM64 Release",
+      "inherits": "base",
+      "architecture": {
+        "value": "ARM64",
+        "strategy": "set"
+      }
+    },
+    {
+      "name": "arm64-debug",
+      "displayName": "ARM64 Debug",
+      "inherits": "arm64",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "arm64-cross",
+      "displayName": "ARM64 Cross-compile (from x64)",
+      "inherits": "base",
+      "architecture": {
+        "value": "ARM64",
+        "strategy": "set"
+      },
+      "toolset": {
+        "value": "host=x64",
+        "strategy": "set"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "x64",
+      "configurePreset": "x64",
+      "configuration": "Release"
+    },
+    {
+      "name": "x64-debug",
+      "configurePreset": "x64-debug",
+      "configuration": "Debug"
+    },
+    {
+      "name": "arm64",
+      "configurePreset": "arm64",
+      "configuration": "Release"
+    },
+    {
+      "name": "arm64-debug",
+      "configurePreset": "arm64-debug",
+      "configuration": "Debug"
+    },
+    {
+      "name": "arm64-cross",
+      "configurePreset": "arm64-cross",
+      "configuration": "Release"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "x64",
+      "configurePreset": "x64",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}

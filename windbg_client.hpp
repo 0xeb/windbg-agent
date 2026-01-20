@@ -1,0 +1,49 @@
+#pragma once
+
+#include "dml_output.hpp"
+#include <dbgeng.h>
+#include <memory>
+#include <string>
+#include <windows.h>
+
+namespace windbg_copilot
+{
+
+// WinDbg/CDB debugger client using dbgeng interfaces and DML for colored output
+class WinDbgClient
+{
+  public:
+    // Construct with an IDebugClient (typically from extension callback)
+    explicit WinDbgClient(IDebugClient* client);
+    ~WinDbgClient();
+
+    // Execute a debugger command and return its output
+    std::string ExecuteCommand(const std::string& command);
+
+    // Output methods for displaying messages to the user
+    void Output(const std::string& message);
+    void OutputError(const std::string& message);
+    void OutputWarning(const std::string& message);
+
+    // Styled output for agent interactions
+    void OutputCommand(const std::string& command);
+    void OutputCommandResult(const std::string& result);
+    void OutputThinking(const std::string& message);
+    void OutputResponse(const std::string& response);
+
+    // Query capabilities
+    bool SupportsColor() const;
+
+    // Get target info (dump file path or process name)
+    std::string GetTargetName() const;
+
+    // Check if user requested interrupt (e.g., Ctrl+C)
+    bool IsInterrupted() const;
+
+  private:
+    IDebugClient* client_;
+    IDebugControl* control_;
+    std::unique_ptr<DmlOutput> dml_;
+};
+
+} // namespace windbg_copilot

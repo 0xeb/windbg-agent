@@ -1,0 +1,3 @@
+[submodule "external/libagents"]
+	path = external/libagents
+	url = https://github.com/0xeb/libagents.git

@@ -1,0 +1,22 @@
+BasedOnStyle: Microsoft
+IndentWidth: 4
+ColumnLimit: 100
+
+# If/else with single statement: no braces, statement on own line
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortBlocksOnASingleLine: Never
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortCaseLabelsOnASingleLine: false
+RemoveBracesLLVM: true
+
+# Braces on their own line (Allman style)
+BreakBeforeBraces: Allman
+
+# Other formatting
+IndentCaseLabels: false
+NamespaceIndentation: None
+PointerAlignment: Left
+SpaceAfterCStyleCast: false
+SpaceBeforeParens: ControlStatements
+SortIncludes: false

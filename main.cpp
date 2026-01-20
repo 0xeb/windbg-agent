@@ -1,0 +1,710 @@
+#include <atomic>
+#include <chrono>
+#include <cstdio>
+#include <dbgeng.h>
+#include <memory>
+#include <string>
+#include <windows.h>
+
+#include "session_store.hpp"
+#include "settings.hpp"
+#include "system_prompt.hpp"
+#include "windbg_client.hpp"
+
+#include <libagents/agent.hpp>
+#include <libagents/tool_builder.hpp>
+
+// Version info
+#define WINDBG_COPILOT_VERSION_MAJOR 0
+#define WINDBG_COPILOT_VERSION_MINOR 3
+#define WINDBG_COPILOT_VERSION_PATCH 0
+
+// Set to 1 to disable session management (for debugging MCP tool visibility issues)
+#define WINDBG_COPILOT_DISABLE_SESSIONS 0
+
+namespace
+{
+struct AgentSession
+{
+    std::unique_ptr<libagents::IAgent> agent;
+    libagents::ProviderType provider = libagents::ProviderType::Copilot;
+    std::string provider_name;
+    std::string target;
+    std::string session_id;
+    std::string system_prompt;
+    bool primed = false;
+    bool initialized = false;
+    bool host_ready = false;
+    std::atomic<bool> aborted{false};
+    windbg_copilot::WinDbgClient* dbg = nullptr;
+    libagents::HostContext host;
+};
+
+// Helper to get IDebugControl for output
+static IDebugControl* GetControl(PDEBUG_CLIENT Client)
+{
+    IDebugControl* control = nullptr;
+    Client->QueryInterface(__uuidof(IDebugControl), (void**)&control);
+    return control;
+}
+
+static AgentSession& GetAgentSession()
+{
+    static AgentSession session;
+    return session;
+}
+
+static void ResetAgentSession(AgentSession& session)
+{
+    if (session.agent)
+    {
+        session.agent->shutdown();
+        session.agent.reset();
+    }
+    session.initialized = false;
+    session.host_ready = false;
+    session.provider_name.clear();
+    session.session_id.clear();
+    session.system_prompt.clear();
+    session.target.clear();
+    session.primed = false;
+}
+
+static libagents::Tool BuildDebuggerTool(AgentSession& session)
+{
+    return libagents::make_tool(
+        "dbg_exec",
+        "Execute a WinDbg/CDB debugger command and return its output. "
+        "Use this to inspect the target process, memory, threads, exceptions, etc.",
+        [&session](std::string command) -> std::string
+        {
+            if (session.aborted.load())
+                return "(Aborted)";
+
+            if (!session.dbg)
+                return "Error: No debugger client available";
+
+            return session.dbg->ExecuteCommand(command);
+        },
+        {"command"});
+}
+
+static void ConfigureHost(AgentSession& session)
+{
+    if (session.host_ready)
+        return;
+
+    session.host.should_abort = [&session]()
+    {
+        if (session.dbg && session.dbg->IsInterrupted())
+            session.aborted = true;
+        return session.aborted.load();
+    };
+
+    session.host.on_event = [&session](const libagents::Event& event)
+    {
+        if (!session.dbg)
+            return;
+
+        switch (event.type)
+        {
+        case libagents::EventType::ContentDelta:
+            session.dbg->OutputThinking(event.content);
+            break;
+        case libagents::EventType::ContentComplete:
+            session.dbg->Output("\n");
+            session.dbg->OutputResponse(event.content.empty() ? "(No output)" : event.content);
+            break;
+        case libagents::EventType::Error:
+            if (!event.error_message.empty())
+                session.dbg->OutputError(event.error_message);
+            else if (!event.content.empty())
+                session.dbg->OutputError(event.content);
+            else
+                session.dbg->OutputError("Error");
+            break;
+        default:
+            break;
+        }
+    };
+
+    session.host_ready = true;
+}
+
+static bool EnsureAgent(AgentSession& session, windbg_copilot::WinDbgClient& dbg_client,
+                        const windbg_copilot::Settings& settings, const std::string& target,
+                        std::string* error, bool* created)
+{
+    if (created)
+        *created = false;
+
+    session.dbg = &dbg_client;
+
+    if (session.agent && session.provider != settings.default_provider)
+        ResetAgentSession(session);
+
+    if (!session.agent)
+    {
+        session.provider = settings.default_provider;
+        session.provider_name = libagents::provider_type_name(session.provider);
+        session.agent = libagents::create_agent(session.provider);
+        if (!session.agent)
+        {
+            if (error)
+                *error = "Failed to create agent";
+
+            return false;
+        }
+
+        session.agent->register_tool(BuildDebuggerTool(session));
+
+        session.system_prompt = windbg_copilot::GetFullSystemPrompt(settings.custom_prompt);
+        session.primed = false; // will prepend on first user query instead of system_prompt
+
+        // Apply BYOK settings if enabled
+        const auto* byok = settings.get_byok();
+        if (byok && byok->is_usable())
+            session.agent->set_byok(byok->to_config());
+
+        // Apply response timeout setting
+        if (settings.response_timeout_ms > 0)
+            session.agent->set_response_timeout(
+                std::chrono::milliseconds(settings.response_timeout_ms));
+
+#if !WINDBG_COPILOT_DISABLE_SESSIONS
+        // Skip session resume when BYOK is enabled (not supported by BYOK providers)
+        if (!(byok && byok->is_usable()))
+        {
+            session.session_id =
+                windbg_copilot::GetSessionStore().GetSessionId(target, session.provider_name);
+            if (!session.session_id.empty())
+                session.agent->set_session_id(session.session_id);
+        }
+#endif
+
+        if (!session.agent->initialize())
+        {
+            if (error)
+                *error = "Failed to initialize: " + session.agent->provider_name();
+
+            ResetAgentSession(session);
+            return false;
+        }
+
+        ConfigureHost(session);
+        session.initialized = true;
+
+        if (created)
+            *created = true;
+    }
+
+    std::string updated_prompt = windbg_copilot::GetFullSystemPrompt(settings.custom_prompt);
+    if (updated_prompt != session.system_prompt)
+    {
+        session.system_prompt = updated_prompt;
+        session.primed = false; // re-prime next turn with new prompt
+    }
+
+    if (session.target != target)
+    {
+        session.target = target;
+#if !WINDBG_COPILOT_DISABLE_SESSIONS
+        // Skip session resume when BYOK is enabled (not supported by BYOK providers)
+        const auto* byok_check = settings.get_byok();
+        if (!(byok_check && byok_check->is_usable()))
+        {
+            std::string new_session_id =
+                windbg_copilot::GetSessionStore().GetSessionId(target, session.provider_name);
+            if (new_session_id != session.session_id)
+            {
+                if (session.agent)
+                {
+                    session.agent->clear_session();
+                    session.session_id = new_session_id;
+                    if (!session.session_id.empty())
+                        session.agent->set_session_id(session.session_id);
+                }
+            }
+        }
+#endif
+        session.primed = false; // new target -> re-prime on next ask
+    }
+
+    session.aborted = false;
+    return true;
+}
+} // namespace
+
+// Extension entry point
+extern "C" __declspec(dllexport) HRESULT CALLBACK DebugExtensionInitialize(PULONG Version,
+                                                                           PULONG Flags)
+{
+    *Version = DEBUG_EXTENSION_VERSION(WINDBG_COPILOT_VERSION_MAJOR, WINDBG_COPILOT_VERSION_MINOR);
+    *Flags = 0;
+    return S_OK;
+}
+
+// Extension cleanup
+extern "C" __declspec(dllexport) void CALLBACK DebugExtensionUninitialize()
+{
+    ResetAgentSession(GetAgentSession());
+}
+
+// Extension notification
+extern "C" __declspec(dllexport) void CALLBACK DebugExtensionNotify(ULONG Notify, ULONG64 Argument)
+{
+    // Could handle session changes here if needed
+}
+
+// Implementation
+HRESULT CALLBACK agent_impl(PDEBUG_CLIENT Client, PCSTR Args)
+{
+    IDebugControl* control = GetControl(Client);
+    if (!control)
+        return E_FAIL;
+
+    // Parse subcommand
+    std::string args_str = Args ? Args : "";
+
+    // Trim leading whitespace
+    size_t start = args_str.find_first_not_of(" \t");
+    if (start != std::string::npos)
+        args_str = args_str.substr(start);
+
+    // Extract subcommand
+    std::string subcmd;
+    std::string rest;
+    size_t space = args_str.find(' ');
+    if (space != std::string::npos)
+    {
+        subcmd = args_str.substr(0, space);
+        rest = args_str.substr(space + 1);
+        // Trim leading whitespace from rest
+        size_t rest_start = rest.find_first_not_of(" \t");
+        if (rest_start != std::string::npos)
+            rest = rest.substr(rest_start);
+    }
+    else
+    {
+        subcmd = args_str;
+    }
+
+    // Handle subcommands
+    if (subcmd.empty() || subcmd == "help")
+    {
+        auto settings = windbg_copilot::LoadSettings();
+        const auto* byok = settings.get_byok();
+        control->Output(
+            DEBUG_OUTPUT_NORMAL,
+            "WinDbg Copilot - AI-powered debugger assistant\n"
+            "\n"
+            "Usage: !agent <command> [args]\n"
+            "       !copilot <question>     (shorthand for !agent ask)\n"
+            "       !ai <question>          (alias for !copilot)\n"
+            "\n"
+            "Commands:\n"
+            "  help                  Show this help\n"
+            "  version               Show version information\n"
+            "  ask <question>        Ask the AI agent a question\n"
+            "  clear                 Clear conversation history\n"
+            "  provider              Show current provider\n"
+            "  provider <name>       Switch provider (claude, copilot)\n"
+            "  prompt                Show custom prompt\n"
+            "  prompt <text>         Set custom prompt (additive)\n"
+            "  prompt clear          Clear custom prompt\n"
+            "  timeout               Show response timeout\n"
+            "  timeout <ms>          Set response timeout in milliseconds\n"
+            "  byok                  Show BYOK (Bring Your Own Key) status\n"
+            "  byok enable|disable   Enable or disable BYOK for current provider\n"
+            "  byok key <value>      Set BYOK API key\n"
+            "  byok endpoint <url>   Set BYOK API endpoint\n"
+            "  byok type <type>      Set BYOK provider type (openai, anthropic, azure)\n"
+            "  byok model <model>    Set BYOK model name\n"
+            "\n"
+            "Current provider: %s%s\n"
+            "\n"
+            "Examples:\n"
+            "  !copilot what is the call stack?       (quick query)\n"
+            "  !copilot and what about the registers? (follow-up)\n"
+            "  !agent provider claude            (switch to Claude)\n"
+            "  !agent byok key sk-xxx            (set your API key)\n"
+            "  !agent byok enable                (use custom API key)\n",
+            libagents::provider_type_name(settings.default_provider),
+            (byok && byok->is_usable()) ? " (BYOK enabled)" : "");
+    }
+    else if (subcmd == "version")
+    {
+        auto settings = windbg_copilot::LoadSettings();
+        control->Output(DEBUG_OUTPUT_NORMAL, "WinDbg Copilot v%d.%d.%d\n",
+                        WINDBG_COPILOT_VERSION_MAJOR, WINDBG_COPILOT_VERSION_MINOR,
+                        WINDBG_COPILOT_VERSION_PATCH);
+        control->Output(DEBUG_OUTPUT_NORMAL, "Current provider: %s\n",
+                        libagents::provider_type_name(settings.default_provider));
+    }
+    else if (subcmd == "provider")
+    {
+        auto settings = windbg_copilot::LoadSettings();
+
+        if (rest.empty())
+        {
+            // Show current provider
+            control->Output(DEBUG_OUTPUT_NORMAL, "Current provider: %s\n",
+                            libagents::provider_type_name(settings.default_provider));
+            control->Output(DEBUG_OUTPUT_NORMAL, "\nAvailable providers:\n");
+            control->Output(DEBUG_OUTPUT_NORMAL, "  claude   - Claude Code (Anthropic)\n");
+            control->Output(DEBUG_OUTPUT_NORMAL, "  copilot  - GitHub Copilot\n");
+        }
+        else
+        {
+            // Switch provider
+            try
+            {
+                auto type = windbg_copilot::ParseProviderType(rest);
+                if (type != settings.default_provider)
+                {
+                    settings.default_provider = type;
+                    windbg_copilot::SaveSettings(settings);
+                    ResetAgentSession(GetAgentSession());
+                }
+                control->Output(DEBUG_OUTPUT_NORMAL, "Provider set to: %s (saved to settings)\n",
+                                libagents::provider_type_name(type));
+            }
+            catch (const std::exception& e)
+            {
+                control->Output(DEBUG_OUTPUT_ERROR, "Error: %s\n", e.what());
+                control->Output(DEBUG_OUTPUT_NORMAL, "Available providers: claude, copilot\n");
+            }
+        }
+    }
+    else if (subcmd == "clear")
+    {
+        auto settings = windbg_copilot::LoadSettings();
+        windbg_copilot::WinDbgClient dbg_client(Client);
+        std::string target = dbg_client.GetTargetName();
+        std::string provider_name = libagents::provider_type_name(settings.default_provider);
+
+        auto& session = GetAgentSession();
+        if (session.agent)
+        {
+            session.agent->clear_session();
+            session.session_id.clear();
+        }
+        windbg_copilot::GetSessionStore().ClearSession(target, provider_name);
+        control->Output(DEBUG_OUTPUT_NORMAL,
+                        "Conversation history cleared (new session for this target).\n");
+    }
+    else if (subcmd == "prompt")
+    {
+        auto settings = windbg_copilot::LoadSettings();
+
+        if (rest.empty())
+        {
+            if (settings.custom_prompt.empty())
+            {
+                control->Output(DEBUG_OUTPUT_NORMAL, "No custom prompt set.\n");
+            }
+            else
+            {
+                control->Output(DEBUG_OUTPUT_NORMAL, "Custom prompt:\n%s\n",
+                                settings.custom_prompt.c_str());
+            }
+        }
+        else if (rest == "clear")
+        {
+            settings.custom_prompt.clear();
+            windbg_copilot::SaveSettings(settings);
+            auto& session = GetAgentSession();
+            if (session.agent)
+            {
+                session.system_prompt = windbg_copilot::GetFullSystemPrompt(settings.custom_prompt);
+                session.primed = false; // re-prime next turn
+            }
+            control->Output(DEBUG_OUTPUT_NORMAL, "Custom prompt cleared.\n");
+        }
+        else
+        {
+            settings.custom_prompt = rest;
+            windbg_copilot::SaveSettings(settings);
+            auto& session = GetAgentSession();
+            if (session.agent)
+            {
+                session.system_prompt = windbg_copilot::GetFullSystemPrompt(settings.custom_prompt);
+                session.primed = false; // re-prime next turn
+            }
+            control->Output(DEBUG_OUTPUT_NORMAL, "Custom prompt set (saved to settings).\n");
+        }
+    }
+    else if (subcmd == "timeout")
+    {
+        auto settings = windbg_copilot::LoadSettings();
+
+        if (rest.empty())
+        {
+            control->Output(DEBUG_OUTPUT_NORMAL, "Response timeout: %d ms (%d seconds)\n",
+                            settings.response_timeout_ms, settings.response_timeout_ms / 1000);
+        }
+        else
+        {
+            try
+            {
+                int ms = std::stoi(rest);
+                if (ms < 1000)
+                {
+                    control->Output(DEBUG_OUTPUT_ERROR,
+                                    "Timeout must be at least 1000 ms (1 second).\n");
+                }
+                else
+                {
+                    settings.response_timeout_ms = ms;
+                    windbg_copilot::SaveSettings(settings);
+                    auto& session = GetAgentSession();
+                    if (session.agent)
+                        session.agent->set_response_timeout(std::chrono::milliseconds(ms));
+                    control->Output(DEBUG_OUTPUT_NORMAL,
+                                    "Timeout set to %d ms (%d seconds).\n", ms, ms / 1000);
+                }
+            }
+            catch (...)
+            {
+                control->Output(DEBUG_OUTPUT_ERROR, "Invalid timeout value. Use milliseconds.\n");
+            }
+        }
+    }
+    else if (subcmd == "byok")
+    {
+        auto settings = windbg_copilot::LoadSettings();
+        std::string provider_name = libagents::provider_type_name(settings.default_provider);
+
+        // Parse BYOK subcommand
+        std::string byok_subcmd;
+        std::string byok_value;
+        size_t byok_space = rest.find(' ');
+        if (byok_space != std::string::npos)
+        {
+            byok_subcmd = rest.substr(0, byok_space);
+            byok_value = rest.substr(byok_space + 1);
+            // Trim leading whitespace
+            size_t val_start = byok_value.find_first_not_of(" \t");
+            if (val_start != std::string::npos)
+                byok_value = byok_value.substr(val_start);
+        }
+        else
+        {
+            byok_subcmd = rest;
+        }
+
+        if (byok_subcmd.empty())
+        {
+            // Show BYOK status for current provider
+            const auto* byok = settings.get_byok();
+            control->Output(DEBUG_OUTPUT_NORMAL, "BYOK status for provider '%s':\n",
+                            provider_name.c_str());
+            if (byok)
+            {
+                control->Output(DEBUG_OUTPUT_NORMAL, "  Enabled:  %s\n",
+                                byok->enabled ? "yes" : "no");
+                control->Output(DEBUG_OUTPUT_NORMAL, "  API Key:  %s\n",
+                                byok->api_key.empty() ? "(not set)" : "********");
+                control->Output(DEBUG_OUTPUT_NORMAL, "  Endpoint: %s\n",
+                                byok->base_url.empty() ? "(default)" : byok->base_url.c_str());
+                control->Output(DEBUG_OUTPUT_NORMAL, "  Model:    %s\n",
+                                byok->model.empty() ? "(default)" : byok->model.c_str());
+                control->Output(DEBUG_OUTPUT_NORMAL, "  Type:     %s\n",
+                                byok->provider_type.empty() ? "(default)"
+                                                            : byok->provider_type.c_str());
+                control->Output(DEBUG_OUTPUT_NORMAL, "  Usable:   %s\n",
+                                byok->is_usable() ? "yes" : "no");
+            }
+            else
+            {
+                control->Output(DEBUG_OUTPUT_NORMAL, "  (not configured)\n");
+            }
+            control->Output(DEBUG_OUTPUT_NORMAL,
+                            "\nUse '!agent byok <cmd>' where cmd is:\n"
+                            "  enable|disable  - Enable or disable BYOK\n"
+                            "  key <value>     - Set API key\n"
+                            "  endpoint <url>  - Set API endpoint\n"
+                            "  model <name>    - Set model name\n"
+                            "  type <type>     - Set provider type (openai, anthropic, azure)\n");
+        }
+        else if (byok_subcmd == "enable")
+        {
+            auto& byok = settings.get_or_create_byok();
+            byok.enabled = true;
+            windbg_copilot::SaveSettings(settings);
+            ResetAgentSession(GetAgentSession());
+            control->Output(DEBUG_OUTPUT_NORMAL, "BYOK enabled for provider '%s'.\n",
+                            provider_name.c_str());
+            if (byok.api_key.empty())
+            {
+                control->Output(
+                    DEBUG_OUTPUT_WARNING,
+                    "Warning: API key not set. Use '!agent byok key <value>' to set it.\n");
+            }
+        }
+        else if (byok_subcmd == "disable")
+        {
+            auto& byok = settings.get_or_create_byok();
+            byok.enabled = false;
+            windbg_copilot::SaveSettings(settings);
+            ResetAgentSession(GetAgentSession());
+            control->Output(DEBUG_OUTPUT_NORMAL, "BYOK disabled for provider '%s'.\n",
+                            provider_name.c_str());
+        }
+        else if (byok_subcmd == "key")
+        {
+            if (byok_value.empty())
+            {
+                control->Output(DEBUG_OUTPUT_ERROR, "Error: API key value required.\n");
+                control->Output(DEBUG_OUTPUT_NORMAL, "Usage: !agent byok key <value>\n");
+            }
+            else
+            {
+                auto& byok = settings.get_or_create_byok();
+                byok.api_key = byok_value;
+                windbg_copilot::SaveSettings(settings);
+                ResetAgentSession(GetAgentSession());
+                control->Output(DEBUG_OUTPUT_NORMAL, "BYOK API key set for provider '%s'.\n",
+                                provider_name.c_str());
+            }
+        }
+        else if (byok_subcmd == "endpoint")
+        {
+            auto& byok = settings.get_or_create_byok();
+            byok.base_url = byok_value; // Empty clears it
+            windbg_copilot::SaveSettings(settings);
+            ResetAgentSession(GetAgentSession());
+            if (byok_value.empty())
+            {
+                control->Output(DEBUG_OUTPUT_NORMAL, "BYOK endpoint cleared (using default).\n");
+            }
+            else
+            {
+                control->Output(DEBUG_OUTPUT_NORMAL, "BYOK endpoint set to: %s\n",
+                                byok_value.c_str());
+            }
+        }
+        else if (byok_subcmd == "model")
+        {
+            auto& byok = settings.get_or_create_byok();
+            byok.model = byok_value; // Empty clears it
+            windbg_copilot::SaveSettings(settings);
+            ResetAgentSession(GetAgentSession());
+            if (byok_value.empty())
+                control->Output(DEBUG_OUTPUT_NORMAL, "BYOK model cleared (using default).\n");
+            else
+                control->Output(DEBUG_OUTPUT_NORMAL, "BYOK model set to: %s\n", byok_value.c_str());
+        }
+        else if (byok_subcmd == "type")
+        {
+            auto& byok = settings.get_or_create_byok();
+            byok.provider_type = byok_value; // Empty clears it
+            windbg_copilot::SaveSettings(settings);
+            ResetAgentSession(GetAgentSession());
+            if (byok_value.empty())
+                control->Output(DEBUG_OUTPUT_NORMAL, "BYOK type cleared (using default).\n");
+            else
+                control->Output(DEBUG_OUTPUT_NORMAL, "BYOK type set to: %s\n", byok_value.c_str());
+        }
+        else
+        {
+            control->Output(DEBUG_OUTPUT_ERROR, "Unknown byok subcommand: %s\n",
+                            byok_subcmd.c_str());
+            control->Output(DEBUG_OUTPUT_NORMAL, "Use '!agent byok' to see available commands.\n");
+        }
+    }
+    else if (subcmd == "ask")
+    {
+        if (rest.empty())
+        {
+            control->Output(DEBUG_OUTPUT_ERROR, "Error: No question provided\n");
+            control->Output(DEBUG_OUTPUT_NORMAL, "Usage: !agent ask <question>\n");
+        }
+        else
+        {
+            windbg_copilot::WinDbgClient dbg_client(Client);
+            auto settings = windbg_copilot::LoadSettings();
+            auto& session = GetAgentSession();
+            std::string target = dbg_client.GetTargetName();
+
+            std::string error;
+            bool created = false;
+            if (!EnsureAgent(session, dbg_client, settings, target, &error, &created))
+            {
+                dbg_client.OutputError(error.empty() ? "Failed to initialize agent" : error);
+                control->Release();
+                return E_FAIL;
+            }
+
+            std::string provider_name = libagents::provider_type_name(settings.default_provider);
+            dbg_client.OutputThinking("[" + provider_name + "] Asking: " + rest);
+            if (created)
+                dbg_client.OutputThinking("Initializing " + provider_name + " provider...");
+
+            try
+            {
+                std::string message =
+                    session.primed || session.system_prompt.empty()
+                        ? rest
+                        : (session.system_prompt + "\n\n---\n\n" + rest);
+
+                std::string response = session.agent->query_hosted(message, session.host);
+                session.primed = true;
+                if (response == "(Aborted)")
+                    dbg_client.OutputWarning("Aborted.");
+
+#if !WINDBG_COPILOT_DISABLE_SESSIONS
+                // Skip session persistence when BYOK is enabled (not supported by BYOK providers)
+                const auto* byok_save = settings.get_byok();
+                if (!(byok_save && byok_save->is_usable()))
+                {
+                    std::string new_session_id = session.agent->get_session_id();
+                    if (!new_session_id.empty() && new_session_id != session.session_id)
+                    {
+                        windbg_copilot::GetSessionStore().SetSessionId(target, provider_name,
+                                                                       new_session_id);
+                        session.session_id = new_session_id;
+                    }
+                }
+#endif
+            }
+            catch (const std::exception& e)
+            {
+                dbg_client.OutputError(e.what());
+            }
+        }
+    }
+    else
+    {
+        control->Output(DEBUG_OUTPUT_ERROR, "Unknown subcommand: %s\n", subcmd.c_str());
+        control->Output(DEBUG_OUTPUT_NORMAL, "Use '!agent help' for usage information.\n");
+    }
+
+    control->Release();
+    return S_OK;
+}
+
+// !agent command - main entry point
+extern "C" __declspec(dllexport) HRESULT CALLBACK agent(PDEBUG_CLIENT Client, PCSTR Args)
+{
+    return agent_impl(Client, Args);
+}
+
+// !ai command - alias for !copilot
+extern "C" __declspec(dllexport) HRESULT CALLBACK ai(PDEBUG_CLIENT Client, PCSTR Args)
+{
+    // Prepend "ask " to make it equivalent to "!agent ask <args>"
+    std::string full_args = "ask ";
+    if (Args && *Args)
+        full_args += Args;
+    return agent_impl(Client, full_args.c_str());
+}
+
+// !copilot command - shorthand for "!agent ask"
+extern "C" __declspec(dllexport) HRESULT CALLBACK copilot(PDEBUG_CLIENT Client, PCSTR Args)
+{
+    std::string full_args = "ask ";
+    if (Args && *Args)
+        full_args += Args;
+    return agent_impl(Client, full_args.c_str());
+}

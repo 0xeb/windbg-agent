@@ -1,0 +1,83 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build-x64:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Build x64
+        run: |
+          cmake --preset x64
+          cmake --build --preset x64
+
+      - name: Upload x64 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windbg_copilot-x64
+          path: build-x64/Release/windbg_copilot.dll
+
+  build-arm64:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Build ARM64
+        run: |
+          cmake --preset arm64
+          cmake --build --preset arm64
+
+      - name: Upload ARM64 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windbg_copilot-arm64
+          path: build-arm64/Release/windbg_copilot.dll
+
+  package:
+    needs: [build-x64, build-arm64]
+    runs-on: windows-latest
+    steps:
+      - name: Download x64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: windbg_copilot-x64
+          path: release/amd64
+
+      - name: Download ARM64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: windbg_copilot-arm64
+          path: release/arm64
+
+      - name: Upload combined artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windbg_copilot
+          path: release/
+
+      - name: Create release zip
+        if: github.event_name == 'release'
+        run: Compress-Archive -Path release/* -DestinationPath windbg_copilot.zip
+
+      - name: Upload to release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload ${{ github.ref_name }} windbg_copilot.zip --clobber --repo ${{ github.repository }}
