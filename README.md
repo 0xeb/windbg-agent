@@ -96,6 +96,12 @@ Settings are saved in `%USERPROFILE%\.windbg_copilot\settings.json`.
 - **Session persistence**: Claude restores sessions across debugger restarts
 - **Multiple providers**: Switch between Claude and Copilot
 
+## Author
+
+Elias Bachaalany ([@0xeb](https://github.com/0xeb))
+
+Pair-programmed with Claude Code and Codex.
+
 ## License
 
 MIT
