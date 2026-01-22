@@ -16,8 +16,8 @@
 #include <libagents/tool_builder.hpp>
 
 // Version info
-#define WINDBG_COPILOT_VERSION_MAJOR 0
-#define WINDBG_COPILOT_VERSION_MINOR 3
+#define WINDBG_COPILOT_VERSION_MAJOR 1
+#define WINDBG_COPILOT_VERSION_MINOR 0
 #define WINDBG_COPILOT_VERSION_PATCH 0
 
 // Set to 1 to disable session management (for debugging MCP tool visibility issues)
