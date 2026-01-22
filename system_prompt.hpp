@@ -158,12 +158,57 @@ Workflow: !address -f:PAGE_EXECUTE_READWRITE → cross-ref with lm → u <suspic
 
 Be concise. Show your reasoning.)";
 
-// Combine system prompt with user's custom prompt
-inline std::string GetFullSystemPrompt(const std::string& custom_prompt)
+// Runtime context for the current debugging session
+struct RuntimeContext
 {
-    if (custom_prompt.empty())
-        return kSystemPrompt;
-    return std::string(kSystemPrompt) + "\n\n" + custom_prompt;
+    std::string target_name;   // Dump file or process name
+    std::string target_arch;   // x86, x64, ARM64
+    std::string debugger_type; // WinDbg, CDB, etc.
+    std::string cwd;           // Current working directory
+    std::string timestamp;     // Session start time (ISO 8601)
+    std::string platform;      // OS info
+
+    bool has_content() const
+    {
+        return !target_name.empty() || !target_arch.empty() || !debugger_type.empty() ||
+               !cwd.empty() || !timestamp.empty() || !platform.empty();
+    }
+};
+
+// Format runtime context as a prompt section
+inline std::string FormatRuntimeContext(const RuntimeContext& ctx)
+{
+    std::string result = "\n\n## Session Context\n";
+
+    if (!ctx.target_name.empty())
+        result += "- Target: " + ctx.target_name + "\n";
+    if (!ctx.target_arch.empty())
+        result += "- Architecture: " + ctx.target_arch + "\n";
+    if (!ctx.debugger_type.empty())
+        result += "- Debugger: " + ctx.debugger_type + "\n";
+    if (!ctx.cwd.empty())
+        result += "- Working Directory: " + ctx.cwd + "\n";
+    if (!ctx.timestamp.empty())
+        result += "- Session Started: " + ctx.timestamp + "\n";
+    if (!ctx.platform.empty())
+        result += "- Platform: " + ctx.platform + "\n";
+
+    return result;
+}
+
+// Combine system prompt with runtime context and user's custom prompt
+inline std::string GetFullSystemPrompt(const std::string& custom_prompt,
+                                       const RuntimeContext& ctx = {})
+{
+    std::string result = kSystemPrompt;
+
+    if (ctx.has_content())
+        result += FormatRuntimeContext(ctx);
+
+    if (!custom_prompt.empty())
+        result += "\n\n" + custom_prompt;
+
+    return result;
 }
 
 } // namespace windbg_copilot

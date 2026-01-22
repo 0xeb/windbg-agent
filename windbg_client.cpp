@@ -1,5 +1,6 @@
 #include "windbg_client.hpp"
 #include "output_capture.hpp"
+#include <cctype>
 #include <wrl/client.h>
 
 namespace windbg_copilot
@@ -158,6 +159,55 @@ std::string WinDbgClient::GetTargetName() const
     }
 
     return "";
+}
+
+std::string WinDbgClient::GetTargetArchitecture() const
+{
+    if (!control_)
+        return "";
+
+    ULONG proc_type = 0;
+    if (SUCCEEDED(control_->GetActualProcessorType(&proc_type)))
+    {
+        switch (proc_type)
+        {
+        case IMAGE_FILE_MACHINE_I386:
+            return "x86";
+        case IMAGE_FILE_MACHINE_AMD64:
+            return "x64";
+        case IMAGE_FILE_MACHINE_ARM64:
+            return "ARM64";
+        case IMAGE_FILE_MACHINE_ARM:
+        case IMAGE_FILE_MACHINE_ARMNT:
+            return "ARM";
+        default:
+            return "Unknown (" + std::to_string(proc_type) + ")";
+        }
+    }
+    return "";
+}
+
+std::string WinDbgClient::GetDebuggerType() const
+{
+    // Detect debugger by examining host process name
+    char module_path[MAX_PATH] = {0};
+    if (GetModuleFileNameA(nullptr, module_path, MAX_PATH))
+    {
+        std::string path = module_path;
+        // Convert to lowercase for comparison
+        for (auto& c : path)
+            c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
+
+        if (path.find("dbgx") != std::string::npos || path.find("windbg") != std::string::npos)
+            return "WinDbg";
+        if (path.find("cdb") != std::string::npos)
+            return "CDB";
+        if (path.find("ntsd") != std::string::npos)
+            return "NTSD";
+        if (path.find("kd") != std::string::npos)
+            return "KD";
+    }
+    return "Windows Debugger";
 }
 
 bool WinDbgClient::IsInterrupted() const
