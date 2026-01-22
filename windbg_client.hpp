@@ -37,6 +37,12 @@ class WinDbgClient
     // Get target info (dump file path or process name)
     std::string GetTargetName() const;
 
+    // Get target architecture (x86, x64, ARM64, etc.)
+    std::string GetTargetArchitecture() const;
+
+    // Get debugger type (WinDbg, CDB, etc.)
+    std::string GetDebuggerType() const;
+
     // Check if user requested interrupt (e.g., Ctrl+C)
     bool IsInterrupted() const;
 

@@ -1,6 +1,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <ctime>
 #include <dbgeng.h>
 #include <memory>
 #include <string>
@@ -24,6 +25,70 @@
 
 namespace
 {
+
+// Format milliseconds as human-readable duration
+static std::string FormatDuration(int ms)
+{
+    if (ms < 1000)
+        return std::to_string(ms) + " ms";
+
+    int total_seconds = ms / 1000;
+    int hours = total_seconds / 3600;
+    int minutes = (total_seconds % 3600) / 60;
+    int seconds = total_seconds % 60;
+
+    std::string result;
+
+    if (hours > 0)
+    {
+        result += std::to_string(hours) + " hour" + (hours != 1 ? "s" : "");
+        if (minutes > 0)
+            result += " " + std::to_string(minutes) + " minute" + (minutes != 1 ? "s" : "");
+    }
+    else if (minutes > 0)
+    {
+        result += std::to_string(minutes) + " minute" + (minutes != 1 ? "s" : "");
+        if (seconds > 0)
+            result += " " + std::to_string(seconds) + " second" + (seconds != 1 ? "s" : "");
+    }
+    else
+    {
+        result = std::to_string(seconds) + " second" + (seconds != 1 ? "s" : "");
+    }
+
+    return result;
+}
+
+// Gather runtime context from the debugger session
+static windbg_copilot::RuntimeContext GatherRuntimeContext(windbg_copilot::WinDbgClient& dbg_client)
+{
+    windbg_copilot::RuntimeContext ctx;
+
+    // Target info
+    ctx.target_name = dbg_client.GetTargetName();
+    ctx.target_arch = dbg_client.GetTargetArchitecture();
+    ctx.debugger_type = dbg_client.GetDebuggerType();
+
+    // Working directory
+    char cwd[MAX_PATH] = {0};
+    if (GetCurrentDirectoryA(MAX_PATH, cwd))
+        ctx.cwd = cwd;
+
+    // Timestamp (ISO 8601 local time)
+    auto now = std::chrono::system_clock::now();
+    std::time_t t = std::chrono::system_clock::to_time_t(now);
+    char time_buf[32];
+    struct tm local_tm;
+    localtime_s(&local_tm, &t);
+    std::strftime(time_buf, sizeof(time_buf), "%Y-%m-%dT%H:%M:%S", &local_tm);
+    ctx.timestamp = time_buf;
+
+    // Platform
+    ctx.platform = "Windows";
+
+    return ctx;
+}
+
 struct AgentSession
 {
     std::unique_ptr<libagents::IAgent> agent;
@@ -133,7 +198,8 @@ static void ConfigureHost(AgentSession& session)
 
 static bool EnsureAgent(AgentSession& session, windbg_copilot::WinDbgClient& dbg_client,
                         const windbg_copilot::Settings& settings, const std::string& target,
-                        std::string* error, bool* created)
+                        const windbg_copilot::RuntimeContext& runtime_ctx, std::string* error,
+                        bool* created)
 {
     if (created)
         *created = false;
@@ -158,7 +224,8 @@ static bool EnsureAgent(AgentSession& session, windbg_copilot::WinDbgClient& dbg
 
         session.agent->register_tool(BuildDebuggerTool(session));
 
-        session.system_prompt = windbg_copilot::GetFullSystemPrompt(settings.custom_prompt);
+        session.system_prompt =
+            windbg_copilot::GetFullSystemPrompt(settings.custom_prompt, runtime_ctx);
         session.primed = false; // will prepend on first user query instead of system_prompt
 
         // Apply BYOK settings if enabled
@@ -198,7 +265,8 @@ static bool EnsureAgent(AgentSession& session, windbg_copilot::WinDbgClient& dbg
             *created = true;
     }
 
-    std::string updated_prompt = windbg_copilot::GetFullSystemPrompt(settings.custom_prompt);
+    std::string updated_prompt =
+        windbg_copilot::GetFullSystemPrompt(settings.custom_prompt, runtime_ctx);
     if (updated_prompt != session.system_prompt)
     {
         session.system_prompt = updated_prompt;
@@ -313,7 +381,7 @@ HRESULT CALLBACK agent_impl(PDEBUG_CLIENT Client, PCSTR Args)
             "  prompt <text>         Set custom prompt (additive)\n"
             "  prompt clear          Clear custom prompt\n"
             "  timeout               Show response timeout\n"
-            "  timeout <ms>          Set response timeout in milliseconds\n"
+            "  timeout <ms>          Set response timeout (e.g., 120000 = 2 min)\n"
             "  byok                  Show BYOK (Bring Your Own Key) status\n"
             "  byok enable|disable   Enable or disable BYOK for current provider\n"
             "  byok key <value>      Set BYOK API key\n"
@@ -331,6 +399,22 @@ HRESULT CALLBACK agent_impl(PDEBUG_CLIENT Client, PCSTR Args)
             "  !agent byok enable                (use custom API key)\n",
             libagents::provider_type_name(settings.default_provider),
             (byok && byok->is_usable()) ? " (BYOK enabled)" : "");
+
+        // Show current session context
+        windbg_copilot::WinDbgClient dbg_client(Client);
+        auto ctx = GatherRuntimeContext(dbg_client);
+        control->Output(DEBUG_OUTPUT_NORMAL, "Session context:\n");
+        if (!ctx.target_name.empty())
+            control->Output(DEBUG_OUTPUT_NORMAL, "  Target:       %s\n", ctx.target_name.c_str());
+        if (!ctx.target_arch.empty())
+            control->Output(DEBUG_OUTPUT_NORMAL, "  Architecture: %s\n", ctx.target_arch.c_str());
+        if (!ctx.debugger_type.empty())
+            control->Output(DEBUG_OUTPUT_NORMAL, "  Debugger:     %s\n", ctx.debugger_type.c_str());
+        if (!ctx.cwd.empty())
+            control->Output(DEBUG_OUTPUT_NORMAL, "  Working dir:  %s\n", ctx.cwd.c_str());
+        if (!ctx.timestamp.empty())
+            control->Output(DEBUG_OUTPUT_NORMAL, "  Timestamp:    %s\n", ctx.timestamp.c_str());
+        control->Output(DEBUG_OUTPUT_NORMAL, "  Platform:     %s\n", ctx.platform.c_str());
     }
     else if (subcmd == "version")
     {
@@ -440,8 +524,8 @@ HRESULT CALLBACK agent_impl(PDEBUG_CLIENT Client, PCSTR Args)
 
         if (rest.empty())
         {
-            control->Output(DEBUG_OUTPUT_NORMAL, "Response timeout: %d ms (%d seconds)\n",
-                            settings.response_timeout_ms, settings.response_timeout_ms / 1000);
+            control->Output(DEBUG_OUTPUT_NORMAL, "Response timeout: %s\n",
+                            FormatDuration(settings.response_timeout_ms).c_str());
         }
         else
         {
@@ -460,8 +544,8 @@ HRESULT CALLBACK agent_impl(PDEBUG_CLIENT Client, PCSTR Args)
                     auto& session = GetAgentSession();
                     if (session.agent)
                         session.agent->set_response_timeout(std::chrono::milliseconds(ms));
-                    control->Output(DEBUG_OUTPUT_NORMAL,
-                                    "Timeout set to %d ms (%d seconds).\n", ms, ms / 1000);
+                    control->Output(DEBUG_OUTPUT_NORMAL, "Timeout set to %s.\n",
+                                    FormatDuration(ms).c_str());
                 }
             }
             catch (...)
@@ -626,10 +710,11 @@ HRESULT CALLBACK agent_impl(PDEBUG_CLIENT Client, PCSTR Args)
             auto settings = windbg_copilot::LoadSettings();
             auto& session = GetAgentSession();
             std::string target = dbg_client.GetTargetName();
+            auto runtime_ctx = GatherRuntimeContext(dbg_client);
 
             std::string error;
             bool created = false;
-            if (!EnsureAgent(session, dbg_client, settings, target, &error, &created))
+            if (!EnsureAgent(session, dbg_client, settings, target, runtime_ctx, &error, &created))
             {
                 dbg_client.OutputError(error.empty() ? "Failed to initialize agent" : error);
                 control->Release();
