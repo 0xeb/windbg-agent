@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(windbg_copilot VERSION 1.0.0 LANGUAGES CXX)
+project(windbg_copilot VERSION 1.0.1 LANGUAGES CXX)
 
 # C++ Standard
 set(CMAKE_CXX_STANDARD 17)
