@@ -43,6 +43,12 @@ class WinDbgClient
     // Get debugger type (WinDbg, CDB, etc.)
     std::string GetDebuggerType() const;
 
+    // Get debugger execution state as a human-readable string
+    std::string GetTargetState() const;
+
+    // Get the current process ID (0 if not available)
+    ULONG GetProcessId() const;
+
     // Check if user requested interrupt (e.g., Ctrl+C)
     bool IsInterrupted() const;
 
