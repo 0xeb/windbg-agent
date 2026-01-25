@@ -220,4 +220,55 @@ bool WinDbgClient::IsInterrupted() const
     return hr == S_OK;
 }
 
+std::string WinDbgClient::GetTargetState() const
+{
+    if (!control_)
+        return "Unknown";
+
+    ULONG status = 0;
+    HRESULT hr = control_->GetExecutionStatus(&status);
+    if (FAILED(hr))
+        return "Unknown";
+
+    switch (status)
+    {
+    case DEBUG_STATUS_NO_DEBUGGEE:
+        return "No target";
+    case DEBUG_STATUS_STEP_INTO:
+    case DEBUG_STATUS_STEP_OVER:
+    case DEBUG_STATUS_STEP_BRANCH:
+        return "Stepping";
+    case DEBUG_STATUS_GO:
+    case DEBUG_STATUS_GO_HANDLED:
+    case DEBUG_STATUS_GO_NOT_HANDLED:
+        return "Running";
+    case DEBUG_STATUS_BREAK:
+        return "Break";
+    case DEBUG_STATUS_OUT_OF_SYNC:
+        return "Out of sync";
+    case DEBUG_STATUS_WAIT_INPUT:
+        return "Waiting for input";
+    case DEBUG_STATUS_TIMEOUT:
+        return "Timeout";
+    default:
+        return "Unknown";
+    }
+}
+
+ULONG WinDbgClient::GetProcessId() const
+{
+    if (!client_)
+        return 0;
+
+    Microsoft::WRL::ComPtr<IDebugSystemObjects> sys;
+    if (SUCCEEDED(client_->QueryInterface(__uuidof(IDebugSystemObjects),
+                                          reinterpret_cast<void**>(sys.GetAddressOf()))))
+    {
+        ULONG pid = 0;
+        if (SUCCEEDED(sys->GetCurrentProcessSystemId(&pid)))
+            return pid;
+    }
+    return 0;
+}
+
 } // namespace windbg_copilot

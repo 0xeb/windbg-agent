@@ -7,6 +7,7 @@
 #include <string>
 #include <windows.h>
 
+#include "handoff_server.hpp"
 #include "session_store.hpp"
 #include "settings.hpp"
 #include "system_prompt.hpp"
@@ -373,6 +374,7 @@ HRESULT CALLBACK agent_impl(PDEBUG_CLIENT Client, PCSTR Args)
             "Commands:\n"
             "  help                  Show this help\n"
             "  version               Show version information\n"
+            "  version prompt        Show injected system prompt\n"
             "  ask <question>        Ask the AI agent a question\n"
             "  clear                 Clear conversation history\n"
             "  provider              Show current provider\n"
@@ -382,6 +384,7 @@ HRESULT CALLBACK agent_impl(PDEBUG_CLIENT Client, PCSTR Args)
             "  prompt clear          Clear custom prompt\n"
             "  timeout               Show response timeout\n"
             "  timeout <ms>          Set response timeout (e.g., 120000 = 2 min)\n"
+            "  handoff               Start handoff server for external tools\n"
             "  byok                  Show BYOK (Bring Your Own Key) status\n"
             "  byok enable|disable   Enable or disable BYOK for current provider\n"
             "  byok key <value>      Set BYOK API key\n"
@@ -419,11 +422,27 @@ HRESULT CALLBACK agent_impl(PDEBUG_CLIENT Client, PCSTR Args)
     else if (subcmd == "version")
     {
         auto settings = windbg_copilot::LoadSettings();
-        control->Output(DEBUG_OUTPUT_NORMAL, "WinDbg Copilot v%d.%d.%d\n",
-                        WINDBG_COPILOT_VERSION_MAJOR, WINDBG_COPILOT_VERSION_MINOR,
-                        WINDBG_COPILOT_VERSION_PATCH);
-        control->Output(DEBUG_OUTPUT_NORMAL, "Current provider: %s\n",
-                        libagents::provider_type_name(settings.default_provider));
+
+        if (rest == "prompt")
+        {
+            // Show the system prompt
+            control->Output(DEBUG_OUTPUT_NORMAL, "=== WinDbg Copilot System Prompt ===\n\n");
+            control->Output(DEBUG_OUTPUT_NORMAL, "%s\n", windbg_copilot::kSystemPrompt);
+            if (!settings.custom_prompt.empty())
+            {
+                control->Output(DEBUG_OUTPUT_NORMAL, "\n=== Custom Prompt (additive) ===\n\n");
+                control->Output(DEBUG_OUTPUT_NORMAL, "%s\n", settings.custom_prompt.c_str());
+            }
+        }
+        else
+        {
+            control->Output(DEBUG_OUTPUT_NORMAL, "WinDbg Copilot v%d.%d.%d\n",
+                            WINDBG_COPILOT_VERSION_MAJOR, WINDBG_COPILOT_VERSION_MINOR,
+                            WINDBG_COPILOT_VERSION_PATCH);
+            control->Output(DEBUG_OUTPUT_NORMAL, "Current provider: %s\n",
+                            libagents::provider_type_name(settings.default_provider));
+            control->Output(DEBUG_OUTPUT_NORMAL, "\nUse '!agent version prompt' to see the injected system prompt.\n");
+        }
     }
     else if (subcmd == "provider")
     {
@@ -696,6 +715,114 @@ HRESULT CALLBACK agent_impl(PDEBUG_CLIENT Client, PCSTR Args)
                             byok_subcmd.c_str());
             control->Output(DEBUG_OUTPUT_NORMAL, "Use '!agent byok' to see available commands.\n");
         }
+    }
+    else if (subcmd == "handoff")
+    {
+        // Start handoff server for external tool integration
+        windbg_copilot::WinDbgClient dbg_client(Client);
+        auto settings = windbg_copilot::LoadSettings();
+        auto& session = GetAgentSession();
+        std::string target = dbg_client.GetTargetName();
+
+        // Find a free port
+        int port = windbg_copilot::find_free_port();
+        std::string url = "http://127.0.0.1:" + std::to_string(port);
+
+        // Get target state
+        std::string state = dbg_client.GetTargetState();
+        ULONG pid = dbg_client.GetProcessId();
+
+        // Create exec callback - executes debugger commands
+        windbg_copilot::ExecCallback exec_cb = [&dbg_client](const std::string& command) -> std::string
+        {
+            return dbg_client.ExecuteCommand(command);
+        };
+
+        // Create ask callback - routes through same AI path as !agent ask
+        windbg_copilot::AskCallback ask_cb = [Client, &settings, &session, &dbg_client,
+                                              &target](const std::string& query) -> std::string
+        {
+            auto runtime_ctx = GatherRuntimeContext(dbg_client);
+            std::string error;
+            bool created = false;
+            if (!EnsureAgent(session, dbg_client, settings, target, runtime_ctx, &error, &created))
+            {
+                return error.empty() ? "Failed to initialize agent" : error;
+            }
+
+            try
+            {
+                std::string message =
+                    session.primed || session.system_prompt.empty()
+                        ? query
+                        : (session.system_prompt + "\n\n---\n\n" + query);
+
+                std::string response = session.agent->query_hosted(message, session.host);
+                session.primed = true;
+
+#if !WINDBG_COPILOT_DISABLE_SESSIONS
+                const auto* byok_save = settings.get_byok();
+                if (!(byok_save && byok_save->is_usable()))
+                {
+                    std::string new_session_id = session.agent->get_session_id();
+                    std::string provider_name =
+                        libagents::provider_type_name(settings.default_provider);
+                    if (!new_session_id.empty() && new_session_id != session.session_id)
+                    {
+                        windbg_copilot::GetSessionStore().SetSessionId(target, provider_name,
+                                                                       new_session_id);
+                        session.session_id = new_session_id;
+                    }
+                }
+#endif
+                return response;
+            }
+            catch (const std::exception& e)
+            {
+                return std::string("Error: ") + e.what();
+            }
+        };
+
+        // Start the handoff server
+        static windbg_copilot::HandoffServer handoff_server;
+        if (handoff_server.is_running())
+        {
+            control->Output(DEBUG_OUTPUT_ERROR,
+                            "Handoff server already running. Stop it before starting a new one.\n");
+            control->Release();
+            return E_FAIL;
+        }
+        int actual_port = handoff_server.start(port, exec_cb, ask_cb);
+        if (actual_port <= 0)
+        {
+            control->Output(DEBUG_OUTPUT_ERROR,
+                            "Failed to start handoff server (port %d unavailable).\n", port);
+            control->Release();
+            return E_FAIL;
+        }
+        url = "http://127.0.0.1:" + std::to_string(actual_port);
+
+        // Format and output handoff info
+        std::string handoff_info =
+            windbg_copilot::format_handoff_info(target, pid, state, url);
+        control->Output(DEBUG_OUTPUT_NORMAL, "%s\n", handoff_info.c_str());
+
+        // Copy to clipboard
+        if (windbg_copilot::copy_to_clipboard(handoff_info))
+        {
+            control->Output(DEBUG_OUTPUT_NORMAL, "[Copied to clipboard]\n");
+        }
+
+        control->Output(DEBUG_OUTPUT_NORMAL, "Press Ctrl+C to stop handoff.\n");
+
+        // Set up interrupt check - stop handoff when user presses Ctrl+C
+        handoff_server.set_interrupt_check([&dbg_client]() {
+            return dbg_client.IsInterrupted();
+        });
+
+        // Block until server stops (user presses Ctrl+C or sends /shutdown)
+        handoff_server.wait();
+        control->Output(DEBUG_OUTPUT_NORMAL, "Handoff server stopped.\n");
     }
     else if (subcmd == "ask")
     {

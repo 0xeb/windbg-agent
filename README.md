@@ -52,6 +52,8 @@ The extension DLL will be at `build/Release/windbg_copilot.dll`.
 | `!agent prompt` | Show current custom prompt |
 | `!agent prompt <text>` | Set custom prompt (appended to system prompt) |
 | `!agent prompt clear` | Clear custom prompt |
+| `!agent handoff` | Start HTTP server for external tool integration |
+| `!agent version prompt` | Show injected system prompt |
 | `!copilot <question>` | Shorthand for `!agent ask` or `!ai` |
 
 ### Examples
@@ -84,6 +86,22 @@ The extension DLL will be at `build/Release/windbg_copilot.dll`.
 !agent clear
 ```
 
+### Handoff (External Tool Integration)
+
+Let external AI agents control the debugger via HTTP:
+
+```bash
+# In WinDbg - start the handoff server
+!agent handoff
+
+# From another terminal - use the CLI tool
+windbg_copilot.exe --url=http://127.0.0.1:9999 ask "what caused this crash?"
+windbg_copilot.exe --url=http://127.0.0.1:9999 exec "kb"
+windbg_copilot.exe --url=http://127.0.0.1:9999 interactive
+windbg_copilot.exe --url=http://127.0.0.1:9999 status
+windbg_copilot.exe --url=http://127.0.0.1:9999 shutdown
+```
+
 Settings are saved in `%USERPROFILE%\.windbg_copilot\settings.json`.
 
 ## Features
@@ -95,6 +113,29 @@ Settings are saved in `%USERPROFILE%\.windbg_copilot\settings.json`.
 - **Conversation continuity**: Follow-up questions remember context
 - **Session persistence**: Claude restores sessions across debugger restarts
 - **Multiple providers**: Switch between Claude and Copilot
+- **Handoff**: Let external AI agents (like Copilot or Claude Code) control the debugger
+
+## Screenshots
+
+### Debugging a Double-Free Bug
+
+AI analyzes a heap corruption crash, identifies the root cause, and offers next steps:
+
+![Crash analysis](assets/crash_analysis.jpg)
+
+User asks for decompilation — AI generates readable pseudocode from assembly:
+
+![Decompilation](assets/decompile.jpg)
+
+### Handoff: External Tool Integration
+
+Start `!agent handoff` to let external tools control WinDbg. The CLI executes commands remotely:
+
+![Handoff with CLI exec](assets/handoff_exec.jpg)
+
+Claude Code (Opus 4.5) controlling WinDbg via handoff — analyzing a double-free crash:
+
+![Claude Code controlling WinDbg](assets/handoff_claude_code.jpg)
 
 ## Author
 

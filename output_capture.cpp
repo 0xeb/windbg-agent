@@ -82,15 +82,46 @@ STDMETHODIMP_(ULONG) OutputCapture::Release()
 // IDebugOutputCallbacks implementation
 STDMETHODIMP OutputCapture::Output(ULONG Mask, PCSTR Text)
 {
+    // Stack-friendly capture: accumulate nested output and flush once at the outermost call.
+    struct StackState
+    {
+        int depth = 0;
+        std::string buffer;
+        bool mask_set = false;
+        ULONG mask = 0;
+    };
+    thread_local StackState state;
+    state.depth++;
+
     // Capture the output
     if (Text)
+    {
         captured_output_ += Text;
+        state.buffer += Text;
+    }
+    if (!state.mask_set)
+    {
+        state.mask = Mask;
+        state.mask_set = true;
+    }
 
-    // Forward to original callbacks (so user still sees output)
+    // Nested call: just accumulate and return.
+    if (state.depth > 1)
+    {
+        state.depth--;
+        return S_OK;
+    }
+
+    // Outermost call: flush accumulated buffer to original callbacks.
+    HRESULT hr = S_OK;
     if (original_callbacks_)
-        return original_callbacks_->Output(Mask, Text);
+        hr = original_callbacks_->Output(state.mask_set ? state.mask : Mask, state.buffer.c_str());
 
-    return S_OK;
+    state.buffer.clear();
+    state.mask_set = false;
+    state.depth--;
+
+    return hr;
 }
 
 } // namespace windbg_copilot
