@@ -11,7 +11,7 @@
 
 #pragma comment(lib, "ws2_32.lib")
 
-namespace windbg_copilot {
+namespace windbg_agent {
 
 class HandoffServer::Impl {
 public:
@@ -309,15 +309,15 @@ std::string format_handoff_info(
     ss << "WinDbg commands - just describe what you want in plain English.\n\n";
 
     ss << "QUICK START:\n";
-    ss << "  windbg_copilot.exe --url=" << url << " ask \"what caused this crash?\"\n";
-    ss << "  windbg_copilot.exe --url=" << url << " ask \"show me the call stack\"\n";
-    ss << "  windbg_copilot.exe --url=" << url << " ask \"what are the local variables?\"\n\n";
+    ss << "  windbg_agent.exe --url=" << url << " ask \"what caused this crash?\"\n";
+    ss << "  windbg_agent.exe --url=" << url << " ask \"show me the call stack\"\n";
+    ss << "  windbg_agent.exe --url=" << url << " ask \"what are the local variables?\"\n\n";
 
     ss << "The AI will execute the right debugger commands and explain the results.\n\n";
 
     ss << "RAW COMMANDS (if you know WinDbg syntax):\n";
-    ss << "  windbg_copilot.exe --url=" << url << " exec \"kb\"\n";
-    ss << "  windbg_copilot.exe --url=" << url << " exec \"!analyze -v\"\n\n";
+    ss << "  windbg_agent.exe --url=" << url << " exec \"kb\"\n";
+    ss << "  windbg_agent.exe --url=" << url << " exec \"!analyze -v\"\n\n";
 
     ss << "CAPABILITIES:\n";
     ss << "- Crash analysis, stack traces, memory inspection\n";
@@ -330,4 +330,4 @@ std::string format_handoff_info(
     return ss.str();
 }
 
-} // namespace windbg_copilot
+} // namespace windbg_agent

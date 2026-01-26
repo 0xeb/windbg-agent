@@ -1,6 +1,6 @@
-# WinDbg Copilot
+# WinDbg Agent
 
-GitHub Copilot powered debugging assistant for WinDbg. Ask questions about your debug session and get intelligent answers with automatic debugger command execution.
+AI-powered debugging assistant for WinDbg. Ask questions about your debug session and get intelligent answers with automatic debugger command execution.
 
 Supports multiple AI providers:
 - **GitHub Copilot** - via [copilot-sdk-cpp](https://github.com/0xeb/copilot-sdk-cpp)
@@ -18,15 +18,15 @@ Supports multiple AI providers:
 
 ```bash
 # Clone with submodules
-git clone --recursive https://github.com/0xeb/windbg_copilot.git
-cd windbg_copilot
+git clone --recursive https://github.com/0xeb/windbg-agent.git
+cd windbg-agent
 
 # Configure and build
 cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release
 ```
 
-The extension DLL will be at `build/Release/windbg_copilot.dll`.
+The extension DLL will be at `build/Release/windbg_agent.dll`.
 
 ## Usage
 
@@ -36,7 +36,7 @@ The extension DLL will be at `build/Release/windbg_copilot.dll`.
 2. Load the extension:
 
 ```
-.load C:\path\to\windbg_copilot.dll
+.load C:\path\to\windbg_agent.dll
 ```
 
 ### Commands
@@ -54,27 +54,27 @@ The extension DLL will be at `build/Release/windbg_copilot.dll`.
 | `!agent prompt clear` | Clear custom prompt |
 | `!agent handoff` | Start HTTP server for external tool integration |
 | `!agent version prompt` | Show injected system prompt |
-| `!copilot <question>` | Shorthand for `!agent ask` or `!ai` |
+| `!ai <question>` | Shorthand for `!agent ask` |
 
 ### Examples
 
 ```
 # Ask about the current state
-!copilot what is the call stack?
-!copilot what is rax + rbx?
+!ai what is the call stack?
+!ai what is rax + rbx?
 
 # Run commands directly - AI executes and explains
-!copilot db @rip L20
-!copilot !peb
+!ai db @rip L20
+!ai !peb
 
 # Decompilation
-!copilot decompile ntdll!RtlAllocateHeap
+!ai decompile ntdll!RtlAllocateHeap
 
 # Follow-up questions (uses conversation history)
-!copilot what about the registers?
+!ai what about the registers?
 
 # Ask for analysis
-!copilot explain this crash
+!ai explain this crash
 
 # Switch to Claude provider
 !agent provider claude
@@ -95,14 +95,14 @@ Let external AI agents control the debugger via HTTP:
 !agent handoff
 
 # From another terminal - use the CLI tool
-windbg_copilot.exe --url=http://127.0.0.1:9999 ask "what caused this crash?"
-windbg_copilot.exe --url=http://127.0.0.1:9999 exec "kb"
-windbg_copilot.exe --url=http://127.0.0.1:9999 interactive
-windbg_copilot.exe --url=http://127.0.0.1:9999 status
-windbg_copilot.exe --url=http://127.0.0.1:9999 shutdown
+windbg_agent.exe --url=http://127.0.0.1:9999 ask "what caused this crash?"
+windbg_agent.exe --url=http://127.0.0.1:9999 exec "kb"
+windbg_agent.exe --url=http://127.0.0.1:9999 interactive
+windbg_agent.exe --url=http://127.0.0.1:9999 status
+windbg_agent.exe --url=http://127.0.0.1:9999 shutdown
 ```
 
-Settings are saved in `%USERPROFILE%\.windbg_copilot\settings.json`.
+Settings are saved in `%USERPROFILE%\.windbg_agent\settings.json`.
 
 ## Features
 

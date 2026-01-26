@@ -1,6 +1,6 @@
 #include "output_capture.hpp"
 
-namespace windbg_copilot
+namespace windbg_agent
 {
 
 OutputCapture::OutputCapture() : ref_count_(1), client_(nullptr), original_callbacks_(nullptr) {}
@@ -124,4 +124,4 @@ STDMETHODIMP OutputCapture::Output(ULONG Mask, PCSTR Text)
     return hr;
 }
 
-} // namespace windbg_copilot
+} // namespace windbg_agent

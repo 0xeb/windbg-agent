@@ -8,7 +8,7 @@
 #include <nlohmann/json.hpp>
 #include <stdexcept>
 
-namespace windbg_copilot
+namespace windbg_agent
 {
 
 namespace fs = std::filesystem;
@@ -21,8 +21,8 @@ std::string GetSettingsDir()
     if (!home)
         home = std::getenv("HOME");
     if (!home)
-        return ".windbg_copilot";
-    return std::string(home) + "\\.windbg_copilot";
+        return ".windbg_agent";
+    return std::string(home) + "\\.windbg_agent";
 }
 
 std::string GetSettingsPath()
@@ -174,4 +174,4 @@ void SaveSettings(const Settings& settings)
         file << j.dump(2);
 }
 
-} // namespace windbg_copilot
+} // namespace windbg_agent

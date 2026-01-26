@@ -28,8 +28,8 @@ jobs:
       - name: Upload x64 artifact
         uses: actions/upload-artifact@v4
         with:
-          name: windbg_copilot-x64
-          path: build-x64/Release/windbg_copilot.dll
+          name: windbg_agent-x64
+          path: build-x64/Release/windbg_agent.dll
 
   build-arm64:
     runs-on: windows-latest
@@ -47,8 +47,8 @@ jobs:
       - name: Upload ARM64 artifact
         uses: actions/upload-artifact@v4
         with:
-          name: windbg_copilot-arm64
-          path: build-arm64/Release/windbg_copilot.dll
+          name: windbg_agent-arm64
+          path: build-arm64/Release/windbg_agent.dll
 
   package:
     needs: [build-x64, build-arm64]
@@ -57,27 +57,27 @@ jobs:
       - name: Download x64 artifact
         uses: actions/download-artifact@v4
         with:
-          name: windbg_copilot-x64
+          name: windbg_agent-x64
           path: release/amd64
 
       - name: Download ARM64 artifact
         uses: actions/download-artifact@v4
         with:
-          name: windbg_copilot-arm64
+          name: windbg_agent-arm64
           path: release/arm64
 
       - name: Upload combined artifact
         uses: actions/upload-artifact@v4
         with:
-          name: windbg_copilot
+          name: windbg_agent
           path: release/
 
       - name: Create release zip
         if: github.event_name == 'release'
-        run: Compress-Archive -Path release/* -DestinationPath windbg_copilot.zip
+        run: Compress-Archive -Path release/* -DestinationPath windbg_agent.zip
 
       - name: Upload to release
         if: github.event_name == 'release'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload ${{ github.ref_name }} windbg_copilot.zip --clobber --repo ${{ github.repository }}
+        run: gh release upload ${{ github.ref_name }} windbg_agent.zip --clobber --repo ${{ github.repository }}

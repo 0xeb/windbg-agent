@@ -4,7 +4,7 @@
 #include <string>
 #include <windows.h>
 
-namespace windbg_copilot
+namespace windbg_agent
 {
 
 // Captures debugger output while optionally forwarding to original callbacks
@@ -38,4 +38,4 @@ class OutputCapture : public IDebugOutputCallbacks
     std::string captured_output_;
 };
 
-} // namespace windbg_copilot
+} // namespace windbg_agent

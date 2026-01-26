@@ -4,7 +4,7 @@
 #include <string>
 #include <windows.h>
 
-namespace windbg_copilot
+namespace windbg_agent
 {
 
 // DML (Debugger Markup Language) output helper
@@ -41,4 +41,4 @@ class DmlOutput
     static std::string EscapeDml(const std::string& text);
 };
 
-} // namespace windbg_copilot
+} // namespace windbg_agent

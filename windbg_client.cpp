@@ -3,7 +3,7 @@
 #include <cctype>
 #include <wrl/client.h>
 
-namespace windbg_copilot
+namespace windbg_agent
 {
 
 WinDbgClient::WinDbgClient(IDebugClient* client) : client_(client), control_(nullptr)
@@ -271,4 +271,4 @@ ULONG WinDbgClient::GetProcessId() const
     return 0;
 }
 
-} // namespace windbg_copilot
+} // namespace windbg_agent

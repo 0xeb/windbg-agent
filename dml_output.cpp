@@ -2,7 +2,7 @@
 #include <cstdarg>
 #include <vector>
 
-namespace windbg_copilot
+namespace windbg_agent
 {
 
 DmlOutput::DmlOutput(IDebugControl* control) : control_(control)
@@ -182,4 +182,4 @@ void DmlOutput::OutputWarning(const char* msg)
     }
 }
 
-} // namespace windbg_copilot
+} // namespace windbg_agent
