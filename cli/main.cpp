@@ -6,7 +6,7 @@
 #include <nlohmann/json.hpp>
 
 void print_usage() {
-    std::cerr << "Usage: windbg_copilot.exe [--url=URL] <command> [args]\n\n";
+    std::cerr << "Usage: windbg_agent.exe [--url=URL] <command> [args]\n\n";
     std::cerr << "Commands:\n";
     std::cerr << "  exec <cmd>       Run debugger command, return raw output\n";
     std::cerr << "  ask <question>   AI-assisted query with reasoning\n";

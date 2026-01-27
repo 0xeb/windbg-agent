@@ -2,7 +2,7 @@
 
 #include <string>
 
-namespace windbg_copilot
+namespace windbg_agent
 {
 
 constexpr const char* kSystemPrompt =
@@ -211,4 +211,4 @@ inline std::string GetFullSystemPrompt(const std::string& custom_prompt,
     return result;
 }
 
-} // namespace windbg_copilot
+} // namespace windbg_agent

@@ -9,7 +9,7 @@
 #include <queue>
 #include <optional>
 
-namespace windbg_copilot {
+namespace windbg_agent {
 
 // Callbacks for handling requests
 using ExecCallback = std::function<std::string(const std::string& command)>;
@@ -100,4 +100,4 @@ std::string format_handoff_info(
     const std::string& url
 );
 
-} // namespace windbg_copilot
+} // namespace windbg_agent

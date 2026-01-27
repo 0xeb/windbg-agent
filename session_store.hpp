@@ -3,11 +3,11 @@
 #include <string>
 #include <unordered_map>
 
-namespace windbg_copilot
+namespace windbg_agent
 {
 
 // Stores session IDs mapped to target files and providers
-// Persisted in ~/.windbg_copilot/settings.json
+// Persisted in ~/.windbg_agent/settings.json
 // Key format: target_path|provider -> session_id (human-readable)
 class SessionStore
 {
@@ -42,4 +42,4 @@ class SessionStore
 // Global session store
 SessionStore& GetSessionStore();
 
-} // namespace windbg_copilot
+} // namespace windbg_agent

@@ -6,7 +6,7 @@
 #include <string>
 #include <windows.h>
 
-namespace windbg_copilot
+namespace windbg_agent
 {
 
 // WinDbg/CDB debugger client using dbgeng interfaces and DML for colored output
@@ -58,4 +58,4 @@ class WinDbgClient
     std::unique_ptr<DmlOutput> dml_;
 };
 
-} // namespace windbg_copilot
+} // namespace windbg_agent

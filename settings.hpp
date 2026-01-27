@@ -5,7 +5,7 @@
 #include <string>
 #include <unordered_map>
 
-namespace windbg_copilot
+namespace windbg_agent
 {
 
 // BYOK settings for a single provider
@@ -34,7 +34,7 @@ struct BYOKSettings
     bool is_usable() const { return enabled && !api_key.empty(); }
 };
 
-// Settings stored in ~/.windbg_copilot/settings.json
+// Settings stored in ~/.windbg_agent/settings.json
 struct Settings
 {
     // Default provider (claude, copilot)
@@ -71,10 +71,10 @@ struct Settings
     }
 };
 
-// Get the settings directory path (~/.windbg_copilot)
+// Get the settings directory path (~/.windbg_agent)
 std::string GetSettingsDir();
 
-// Get the settings file path (~/.windbg_copilot/settings.json)
+// Get the settings file path (~/.windbg_agent/settings.json)
 std::string GetSettingsPath();
 
 // Load settings from disk (creates default if not exists)
@@ -86,4 +86,4 @@ void SaveSettings(const Settings& settings);
 // Parse provider type from string (e.g., "claude", "copilot")
 libagents::ProviderType ParseProviderType(const std::string& name);
 
-} // namespace windbg_copilot
+} // namespace windbg_agent

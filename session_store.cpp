@@ -5,7 +5,7 @@
 #include <iomanip>
 #include <sstream>
 
-namespace windbg_copilot
+namespace windbg_agent
 {
 
 static std::unique_ptr<SessionStore> g_session_store;
@@ -87,4 +87,4 @@ void SessionStore::Save() const
     SaveSettings(settings);
 }
 
-} // namespace windbg_copilot
+} // namespace windbg_agent
