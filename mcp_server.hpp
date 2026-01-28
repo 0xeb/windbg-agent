@@ -7,16 +7,16 @@
 #include <mutex>
 #include <condition_variable>
 #include <queue>
-#include <optional>
+#include <memory>
 
 namespace windbg_agent {
 
-// Callbacks for handling requests
+// Callbacks for handling requests (same as handoff)
 using ExecCallback = std::function<std::string(const std::string& command)>;
 using AskCallback = std::function<std::string(const std::string& query)>;
 
 // Internal command structure for cross-thread execution
-struct PendingCommand {
+struct MCPPendingCommand {
     enum class Type { Exec, Ask };
     Type type;
     std::string input;
@@ -26,21 +26,21 @@ struct PendingCommand {
     std::condition_variable* done_cv = nullptr;
 };
 
-struct QueueResult {
+struct MCPQueueResult {
     bool success;
     std::string payload;
 };
 
-class HandoffServer {
+class MCPServer {
 public:
-    HandoffServer();
-    ~HandoffServer();
+    MCPServer();
+    ~MCPServer();
 
     // Non-copyable
-    HandoffServer(const HandoffServer&) = delete;
-    HandoffServer& operator=(const HandoffServer&) = delete;
+    MCPServer(const MCPServer&) = delete;
+    MCPServer& operator=(const MCPServer&) = delete;
 
-    // Start server on given port with callbacks
+    // Start MCP server on given port with callbacks
     // Returns actual port used (may differ if auto-assigned)
     // Callbacks will be called on the main thread (in wait())
     // bind_addr: "127.0.0.1" for localhost only, "0.0.0.0" for all interfaces
@@ -60,46 +60,36 @@ public:
     // Get the port the server is listening on
     int port() const { return port_; }
 
-    // Get the bind address
-    const std::string& bind_addr() const { return bind_addr_; }
-
-    // Queue a command for execution on the main thread (called by HTTP handlers)
-    QueueResult queue_and_wait(PendingCommand::Type type, const std::string& input);
-
     // Set interrupt check function (called during wait loop)
     void set_interrupt_check(std::function<bool()> check);
 
+    // Queue a command for execution on the main thread (called by MCP tool handlers)
+    MCPQueueResult queue_and_wait(MCPPendingCommand::Type type, const std::string& input);
+
 private:
     std::function<bool()> interrupt_check_;
-    std::thread server_thread_;
     std::atomic<bool> running_{false};
-    int port_{0};
     std::string bind_addr_{"127.0.0.1"};
+    int port_{0};
 
     // Command queue for cross-thread execution
     std::mutex queue_mutex_;
     std::condition_variable queue_cv_;
-    std::queue<PendingCommand*> pending_commands_;
+    std::queue<MCPPendingCommand*> pending_commands_;
 
     // Callbacks stored for main thread execution
     ExecCallback exec_cb_;
     AskCallback ask_cb_;
 
-    // Forward declaration - impl hides httplib
+    // Forward declaration - impl hides fastmcpp
     class Impl;
     std::unique_ptr<Impl> impl_;
 
     void complete_pending_commands(const std::string& result);
 };
 
-// Find a free port starting from start_port
-int find_free_port(int start_port = 9999);
-
-// Copy text to Windows clipboard
-bool copy_to_clipboard(const std::string& text);
-
-// Format handoff info for display and clipboard
-std::string format_handoff_info(
+// Format MCP server info for display
+std::string format_mcp_info(
     const std::string& target_name,
     unsigned long pid,
     const std::string& state,

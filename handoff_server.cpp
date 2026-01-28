@@ -57,18 +57,20 @@ QueueResult HandoffServer::queue_and_wait(PendingCommand::Type type, const std::
     return {true, cmd.result};
 }
 
-int HandoffServer::start(int port, ExecCallback exec_cb, AskCallback ask_cb) {
+int HandoffServer::start(int port, ExecCallback exec_cb, AskCallback ask_cb,
+                         const std::string& bind_addr) {
     if (running_.load()) {
         return port_;
     }
 
     exec_cb_ = exec_cb;
     ask_cb_ = ask_cb;
+    bind_addr_ = bind_addr;
 
     impl_ = std::make_unique<Impl>();
 
     // bind_to_port returns bool, not the port number
-    bool bound = impl_->server.bind_to_port("127.0.0.1", port);
+    bool bound = impl_->server.bind_to_port(bind_addr.c_str(), port);
     if (!bound) {
         impl_.reset();
         return -1;
@@ -305,28 +307,47 @@ std::string format_handoff_info(
     ss << "State: " << state << "\n";
     ss << "URL: " << url << "\n\n";
 
-    ss << "WinDbg Copilot is an expert debugger assistant. You don't need to know\n";
-    ss << "WinDbg commands - just describe what you want in plain English.\n\n";
+    ss << "HTTP API ENDPOINTS:\n";
+    ss << "  POST " << url << "/exec   - Execute raw debugger command\n";
+    ss << "  POST " << url << "/ask    - AI-assisted query (natural language)\n";
+    ss << "  GET  " << url << "/status - Server status\n";
+    ss << "  POST " << url << "/shutdown - Stop server\n\n";
 
-    ss << "QUICK START:\n";
-    ss << "  windbg_agent.exe --url=" << url << " ask \"what caused this crash?\"\n";
-    ss << "  windbg_agent.exe --url=" << url << " ask \"show me the call stack\"\n";
-    ss << "  windbg_agent.exe --url=" << url << " ask \"what are the local variables?\"\n\n";
+    ss << "CURL EXAMPLES:\n";
+    ss << "  # Execute debugger command (returns raw output)\n";
+    ss << "  curl -X POST " << url << "/exec \\\n";
+    ss << "    -H \"Content-Type: application/json\" \\\n";
+    ss << "    -d '{\"command\": \"kb\"}'\n\n";
 
-    ss << "The AI will execute the right debugger commands and explain the results.\n\n";
+    ss << "  # AI query (natural language, returns explanation)\n";
+    ss << "  curl -X POST " << url << "/ask \\\n";
+    ss << "    -H \"Content-Type: application/json\" \\\n";
+    ss << "    -d '{\"query\": \"what is the value of RAX?\"}'\n\n";
 
-    ss << "RAW COMMANDS (if you know WinDbg syntax):\n";
+    ss << "  # More examples\n";
+    ss << "  curl -X POST " << url << "/exec -H \"Content-Type: application/json\" -d '{\"command\": \"r rax\"}'\n";
+    ss << "  curl -X POST " << url << "/exec -H \"Content-Type: application/json\" -d '{\"command\": \"!analyze -v\"}'\n";
+    ss << "  curl -X POST " << url << "/ask -H \"Content-Type: application/json\" -d '{\"query\": \"explain this crash\"}'\n\n";
+
+    ss << "PYTHON:\n";
+    ss << "  import requests\n";
+    ss << "  # Execute command\n";
+    ss << "  r = requests.post('" << url << "/exec', json={'command': 'kb'})\n";
+    ss << "  print(r.json()['output'])\n\n";
+
+    ss << "  # AI query\n";
+    ss << "  r = requests.post('" << url << "/ask', json={'query': 'what caused this crash?'})\n";
+    ss << "  print(r.json()['response'])\n\n";
+
+    ss << "RESPONSE FORMAT:\n";
+    ss << "  /exec returns: {\"output\": \"...\", \"success\": true}\n";
+    ss << "  /ask returns:  {\"response\": \"...\", \"success\": true}\n\n";
+
+    ss << "CLI TOOL:\n";
     ss << "  windbg_agent.exe --url=" << url << " exec \"kb\"\n";
-    ss << "  windbg_agent.exe --url=" << url << " exec \"!analyze -v\"\n\n";
+    ss << "  windbg_agent.exe --url=" << url << " ask \"what caused this crash?\"\n";
+    ss << "  windbg_agent.exe --url=" << url << " interactive\n";
 
-    ss << "CAPABILITIES:\n";
-    ss << "- Crash analysis, stack traces, memory inspection\n";
-    ss << "- Expression evaluation, disassembly, type display\n";
-    ss << "- Reverse engineering and decompilation\n";
-    ss << "- Shellcode and suspicious memory detection\n";
-    ss << "- Just ask - it knows WinDbg/CDB commands\n\n";
-
-    ss << "OTHER: status, shutdown, interactive\n";
     return ss.str();
 }
 

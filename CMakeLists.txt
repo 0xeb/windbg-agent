@@ -39,12 +39,14 @@ add_library(windbg_agent SHARED
     dml_output.cpp
     windbg_client.cpp
     handoff_server.cpp
+    mcp_server.cpp
 )
 
 # Link with libagents and Windows debugging libraries
 target_link_libraries(windbg_agent
     PRIVATE
         libagents         # Unified provider library
+        fastmcpp_core     # MCP server library (via libagents/claude-agent-sdk-cpp)
         dbgeng            # Debugging Engine API
         dbghelp           # Debug Help Library
         ws2_32            # Winsock for handoff server
@@ -98,14 +100,17 @@ endif()
 # ============================================================================
 add_executable(windbg_agent_cli
     cli/main.cpp
+    settings.cpp
 )
 
 target_include_directories(windbg_agent_cli PRIVATE
     ${cpp_httplib_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
 # nlohmann/json is available through libagents dependencies
 target_link_libraries(windbg_agent_cli PRIVATE
+    libagents
     nlohmann_json::nlohmann_json
     ws2_32
 )
