@@ -305,28 +305,52 @@ std::string format_handoff_info(
     ss << "State: " << state << "\n";
     ss << "URL: " << url << "\n\n";
 
-    ss << "WinDbg Copilot is an expert debugger assistant. You don't need to know\n";
-    ss << "WinDbg commands - just describe what you want in plain English.\n\n";
+    ss << "HTTP API ENDPOINTS:\n";
+    ss << "  POST " << url << "/exec   - Execute raw debugger command\n";
+    ss << "  POST " << url << "/ask    - AI-assisted query (natural language)\n";
+    ss << "  GET  " << url << "/status - Server status\n";
+    ss << "  POST " << url << "/shutdown - Stop server\n\n";
 
-    ss << "QUICK START:\n";
-    ss << "  windbg_agent.exe --url=" << url << " ask \"what caused this crash?\"\n";
-    ss << "  windbg_agent.exe --url=" << url << " ask \"show me the call stack\"\n";
-    ss << "  windbg_agent.exe --url=" << url << " ask \"what are the local variables?\"\n\n";
+    ss << "CURL EXAMPLES:\n";
+    ss << "  # Execute debugger command (returns raw output)\n";
+    ss << "  curl -X POST " << url << "/exec \\\n";
+    ss << "    -H \"Content-Type: application/json\" \\\n";
+    ss << "    -d '{\"command\": \"kb\"}'\n\n";
 
-    ss << "The AI will execute the right debugger commands and explain the results.\n\n";
+    ss << "  # AI query (natural language, returns explanation)\n";
+    ss << "  curl -X POST " << url << "/ask \\\n";
+    ss << "    -H \"Content-Type: application/json\" \\\n";
+    ss << "    -d '{\"query\": \"what is the value of RAX?\"}'\n\n";
 
-    ss << "RAW COMMANDS (if you know WinDbg syntax):\n";
+    ss << "  # More examples\n";
+    ss << "  curl -X POST " << url << "/exec -H \"Content-Type: application/json\" -d '{\"command\": \"r rax\"}'\n";
+    ss << "  curl -X POST " << url << "/exec -H \"Content-Type: application/json\" -d '{\"command\": \"!analyze -v\"}'\n";
+    ss << "  curl -X POST " << url << "/ask -H \"Content-Type: application/json\" -d '{\"query\": \"explain this crash\"}'\n\n";
+
+    ss << "NODE.JS / FETCH:\n";
+    ss << "  // Execute command\n";
+    ss << "  fetch('" << url << "/exec', {\n";
+    ss << "    method: 'POST',\n";
+    ss << "    headers: {'Content-Type': 'application/json'},\n";
+    ss << "    body: JSON.stringify({command: 'kb'})\n";
+    ss << "  }).then(r => r.json()).then(console.log)\n\n";
+
+    ss << "  // AI query\n";
+    ss << "  fetch('" << url << "/ask', {\n";
+    ss << "    method: 'POST',\n";
+    ss << "    headers: {'Content-Type': 'application/json'},\n";
+    ss << "    body: JSON.stringify({query: 'what caused this crash?'})\n";
+    ss << "  }).then(r => r.json()).then(console.log)\n\n";
+
+    ss << "RESPONSE FORMAT:\n";
+    ss << "  /exec returns: {\"output\": \"...\", \"success\": true}\n";
+    ss << "  /ask returns:  {\"response\": \"...\", \"success\": true}\n\n";
+
+    ss << "CLI TOOL:\n";
     ss << "  windbg_agent.exe --url=" << url << " exec \"kb\"\n";
-    ss << "  windbg_agent.exe --url=" << url << " exec \"!analyze -v\"\n\n";
+    ss << "  windbg_agent.exe --url=" << url << " ask \"what caused this crash?\"\n";
+    ss << "  windbg_agent.exe --url=" << url << " interactive\n";
 
-    ss << "CAPABILITIES:\n";
-    ss << "- Crash analysis, stack traces, memory inspection\n";
-    ss << "- Expression evaluation, disassembly, type display\n";
-    ss << "- Reverse engineering and decompilation\n";
-    ss << "- Shellcode and suspicious memory detection\n";
-    ss << "- Just ask - it knows WinDbg/CDB commands\n\n";
-
-    ss << "OTHER: status, shutdown, interactive\n";
     return ss.str();
 }
 
