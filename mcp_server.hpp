@@ -43,7 +43,9 @@ public:
     // Start MCP server on given port with callbacks
     // Returns actual port used (may differ if auto-assigned)
     // Callbacks will be called on the main thread (in wait())
-    int start(int port, ExecCallback exec_cb, AskCallback ask_cb);
+    // bind_addr: "127.0.0.1" for localhost only, "0.0.0.0" for all interfaces
+    int start(int port, ExecCallback exec_cb, AskCallback ask_cb,
+              const std::string& bind_addr = "127.0.0.1");
 
     // Block until server stops, processing commands on the calling thread
     // This is where exec_cb and ask_cb get called
@@ -67,6 +69,7 @@ public:
 private:
     std::function<bool()> interrupt_check_;
     std::atomic<bool> running_{false};
+    std::string bind_addr_{"127.0.0.1"};
     int port_{0};
 
     // Command queue for cross-thread execution

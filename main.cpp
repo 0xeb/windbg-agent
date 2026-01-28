@@ -725,14 +725,28 @@ HRESULT CALLBACK agent_impl(PDEBUG_CLIENT Client, PCSTR Args)
     else if (subcmd == "handoff")
     {
         // Start handoff server for external tool integration
+        // Usage: !agent handoff [bind_addr]
+        // bind_addr: "127.0.0.1" (default, localhost only) or "0.0.0.0" (all interfaces)
         windbg_agent::WinDbgClient dbg_client(Client);
         auto settings = windbg_agent::LoadSettings();
         auto& session = GetAgentSession();
         std::string target = dbg_client.GetTargetName();
 
+        // Parse optional bind address
+        std::string bind_addr = "127.0.0.1";
+        if (!rest.empty())
+        {
+            bind_addr = rest;
+            // Trim whitespace
+            size_t start = bind_addr.find_first_not_of(" \t");
+            size_t end = bind_addr.find_last_not_of(" \t");
+            if (start != std::string::npos)
+                bind_addr = bind_addr.substr(start, end - start + 1);
+        }
+
         // Find a free port
         int port = windbg_agent::find_free_port();
-        std::string url = "http://127.0.0.1:" + std::to_string(port);
+        std::string url = "http://" + bind_addr + ":" + std::to_string(port);
 
         // Get target state
         std::string state = dbg_client.GetTargetState();
@@ -798,7 +812,7 @@ HRESULT CALLBACK agent_impl(PDEBUG_CLIENT Client, PCSTR Args)
             control->Release();
             return E_FAIL;
         }
-        int actual_port = handoff_server.start(port, exec_cb, ask_cb);
+        int actual_port = handoff_server.start(port, exec_cb, ask_cb, bind_addr);
         if (actual_port <= 0)
         {
             control->Output(DEBUG_OUTPUT_ERROR,
@@ -806,7 +820,7 @@ HRESULT CALLBACK agent_impl(PDEBUG_CLIENT Client, PCSTR Args)
             control->Release();
             return E_FAIL;
         }
-        url = "http://127.0.0.1:" + std::to_string(actual_port);
+        url = "http://" + bind_addr + ":" + std::to_string(actual_port);
 
         // Format and output handoff info
         std::string handoff_info =
@@ -833,14 +847,27 @@ HRESULT CALLBACK agent_impl(PDEBUG_CLIENT Client, PCSTR Args)
     else if (subcmd == "mcp")
     {
         // Start MCP server for MCP-compatible clients
+        // Usage: !agent mcp [bind_addr]
+        // bind_addr: "127.0.0.1" (default, localhost only) or "0.0.0.0" (all interfaces)
         windbg_agent::WinDbgClient dbg_client(Client);
         auto settings = windbg_agent::LoadSettings();
         auto& session = GetAgentSession();
         std::string target = dbg_client.GetTargetName();
 
+        // Parse optional bind address
+        std::string bind_addr = "127.0.0.1";
+        if (!rest.empty())
+        {
+            bind_addr = rest;
+            size_t start = bind_addr.find_first_not_of(" \t");
+            size_t end = bind_addr.find_last_not_of(" \t");
+            if (start != std::string::npos)
+                bind_addr = bind_addr.substr(start, end - start + 1);
+        }
+
         // Find a free port (start from 9998 to avoid conflict with default handoff port)
         int port = windbg_agent::find_free_port(9998);
-        std::string url = "http://127.0.0.1:" + std::to_string(port);
+        std::string url = "http://" + bind_addr + ":" + std::to_string(port);
 
         // Get target state
         std::string state = dbg_client.GetTargetState();
@@ -906,7 +933,7 @@ HRESULT CALLBACK agent_impl(PDEBUG_CLIENT Client, PCSTR Args)
             control->Release();
             return E_FAIL;
         }
-        int actual_port = mcp_server.start(port, exec_cb, ask_cb);
+        int actual_port = mcp_server.start(port, exec_cb, ask_cb, bind_addr);
         if (actual_port <= 0)
         {
             control->Output(DEBUG_OUTPUT_ERROR,
@@ -914,7 +941,7 @@ HRESULT CALLBACK agent_impl(PDEBUG_CLIENT Client, PCSTR Args)
             control->Release();
             return E_FAIL;
         }
-        url = "http://127.0.0.1:" + std::to_string(actual_port);
+        url = "http://" + bind_addr + ":" + std::to_string(actual_port);
 
         // Format and output MCP server info
         std::string mcp_info =

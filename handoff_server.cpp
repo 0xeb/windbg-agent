@@ -57,18 +57,20 @@ QueueResult HandoffServer::queue_and_wait(PendingCommand::Type type, const std::
     return {true, cmd.result};
 }
 
-int HandoffServer::start(int port, ExecCallback exec_cb, AskCallback ask_cb) {
+int HandoffServer::start(int port, ExecCallback exec_cb, AskCallback ask_cb,
+                         const std::string& bind_addr) {
     if (running_.load()) {
         return port_;
     }
 
     exec_cb_ = exec_cb;
     ask_cb_ = ask_cb;
+    bind_addr_ = bind_addr;
 
     impl_ = std::make_unique<Impl>();
 
     // bind_to_port returns bool, not the port number
-    bool bound = impl_->server.bind_to_port("127.0.0.1", port);
+    bool bound = impl_->server.bind_to_port(bind_addr.c_str(), port);
     if (!bound) {
         impl_.reset();
         return -1;

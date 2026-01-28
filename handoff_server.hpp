@@ -43,7 +43,9 @@ public:
     // Start server on given port with callbacks
     // Returns actual port used (may differ if auto-assigned)
     // Callbacks will be called on the main thread (in wait())
-    int start(int port, ExecCallback exec_cb, AskCallback ask_cb);
+    // bind_addr: "127.0.0.1" for localhost only, "0.0.0.0" for all interfaces
+    int start(int port, ExecCallback exec_cb, AskCallback ask_cb,
+              const std::string& bind_addr = "127.0.0.1");
 
     // Block until server stops, processing commands on the calling thread
     // This is where exec_cb and ask_cb get called
@@ -58,6 +60,9 @@ public:
     // Get the port the server is listening on
     int port() const { return port_; }
 
+    // Get the bind address
+    const std::string& bind_addr() const { return bind_addr_; }
+
     // Queue a command for execution on the main thread (called by HTTP handlers)
     QueueResult queue_and_wait(PendingCommand::Type type, const std::string& input);
 
@@ -69,6 +74,7 @@ private:
     std::thread server_thread_;
     std::atomic<bool> running_{false};
     int port_{0};
+    std::string bind_addr_{"127.0.0.1"};
 
     // Command queue for cross-thread execution
     std::mutex queue_mutex_;

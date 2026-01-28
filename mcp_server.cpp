@@ -58,13 +58,15 @@ MCPQueueResult MCPServer::queue_and_wait(MCPPendingCommand::Type type, const std
     return {true, cmd.result};
 }
 
-int MCPServer::start(int port, ExecCallback exec_cb, AskCallback ask_cb) {
+int MCPServer::start(int port, ExecCallback exec_cb, AskCallback ask_cb,
+                     const std::string& bind_addr) {
     if (running_.load()) {
         return port_;
     }
 
     exec_cb_ = exec_cb;
     ask_cb_ = ask_cb;
+    bind_addr_ = bind_addr;
 
     impl_ = std::make_unique<Impl>();
 
@@ -181,7 +183,7 @@ int MCPServer::start(int port, ExecCallback exec_cb, AskCallback ask_cb) {
     // Create and start SSE server
     impl_->server = std::make_unique<fastmcpp::server::SseServerWrapper>(
         handler,
-        "127.0.0.1",
+        bind_addr_,
         port,
         "/sse",
         "/messages"
