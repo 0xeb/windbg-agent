@@ -327,20 +327,15 @@ std::string format_handoff_info(
     ss << "  curl -X POST " << url << "/exec -H \"Content-Type: application/json\" -d '{\"command\": \"!analyze -v\"}'\n";
     ss << "  curl -X POST " << url << "/ask -H \"Content-Type: application/json\" -d '{\"query\": \"explain this crash\"}'\n\n";
 
-    ss << "NODE.JS / FETCH:\n";
-    ss << "  // Execute command\n";
-    ss << "  fetch('" << url << "/exec', {\n";
-    ss << "    method: 'POST',\n";
-    ss << "    headers: {'Content-Type': 'application/json'},\n";
-    ss << "    body: JSON.stringify({command: 'kb'})\n";
-    ss << "  }).then(r => r.json()).then(console.log)\n\n";
+    ss << "PYTHON:\n";
+    ss << "  import requests\n";
+    ss << "  # Execute command\n";
+    ss << "  r = requests.post('" << url << "/exec', json={'command': 'kb'})\n";
+    ss << "  print(r.json()['output'])\n\n";
 
-    ss << "  // AI query\n";
-    ss << "  fetch('" << url << "/ask', {\n";
-    ss << "    method: 'POST',\n";
-    ss << "    headers: {'Content-Type': 'application/json'},\n";
-    ss << "    body: JSON.stringify({query: 'what caused this crash?'})\n";
-    ss << "  }).then(r => r.json()).then(console.log)\n\n";
+    ss << "  # AI query\n";
+    ss << "  r = requests.post('" << url << "/ask', json={'query': 'what caused this crash?'})\n";
+    ss << "  print(r.json()['response'])\n\n";
 
     ss << "RESPONSE FORMAT:\n";
     ss << "  /exec returns: {\"output\": \"...\", \"success\": true}\n";
