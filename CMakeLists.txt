@@ -42,6 +42,9 @@ add_library(windbg_agent SHARED
     mcp_server.cpp
 )
 
+# Module definition file: forces undecorated export names on Win32 (x86)
+target_sources(windbg_agent PRIVATE windbg_agent.def)
+
 # Link with libagents and Windows debugging libraries
 target_link_libraries(windbg_agent
     PRIVATE

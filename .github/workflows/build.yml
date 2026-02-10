@@ -12,6 +12,25 @@ permissions:
   contents: write
 
 jobs:
+  build-x86:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Build x86
+        run: |
+          cmake --preset x86
+          cmake --build --preset x86
+
+      - name: Upload x86 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windbg_agent-x86
+          path: build-x86/Release/windbg_agent.dll
+
   build-x64:
     runs-on: windows-latest
     steps:
@@ -51,9 +70,15 @@ jobs:
           path: build-arm64/Release/windbg_agent.dll
 
   package:
-    needs: [build-x64, build-arm64]
+    needs: [build-x86, build-x64, build-arm64]
     runs-on: windows-latest
     steps:
+      - name: Download x86 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: windbg_agent-x86
+          path: release/x86
+
       - name: Download x64 artifact
         uses: actions/download-artifact@v4
         with:

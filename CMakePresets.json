@@ -16,6 +16,15 @@
       }
     },
     {
+      "name": "x86",
+      "displayName": "x86 (Win32) Release",
+      "inherits": "base",
+      "architecture": {
+        "value": "Win32",
+        "strategy": "set"
+      }
+    },
+    {
       "name": "x64",
       "displayName": "x64 Release",
       "inherits": "base",
@@ -64,6 +73,11 @@
     }
   ],
   "buildPresets": [
+    {
+      "name": "x86",
+      "configurePreset": "x86",
+      "configuration": "Release"
+    },
     {
       "name": "x64",
       "configurePreset": "x64",

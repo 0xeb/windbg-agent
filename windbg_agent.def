@@ -1,0 +1,7 @@
+LIBRARY windbg_agent
+EXPORTS
+    DebugExtensionInitialize
+    DebugExtensionUninitialize
+    DebugExtensionNotify
+    agent
+    ai
