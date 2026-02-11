@@ -311,8 +311,7 @@ static bool EnsureAgent(AgentSession& session, windbg_agent::WinDbgClient& dbg_c
 } // namespace
 
 // Extension entry point
-extern "C" __declspec(dllexport) HRESULT CALLBACK DebugExtensionInitialize(PULONG Version,
-                                                                           PULONG Flags)
+extern "C" HRESULT CALLBACK DebugExtensionInitialize(PULONG Version, PULONG Flags)
 {
     *Version = DEBUG_EXTENSION_VERSION(WINDBG_AGENT_VERSION_MAJOR, WINDBG_AGENT_VERSION_MINOR);
     *Flags = 0;
@@ -320,13 +319,13 @@ extern "C" __declspec(dllexport) HRESULT CALLBACK DebugExtensionInitialize(PULON
 }
 
 // Extension cleanup
-extern "C" __declspec(dllexport) void CALLBACK DebugExtensionUninitialize()
+extern "C" void CALLBACK DebugExtensionUninitialize()
 {
     ResetAgentSession(GetAgentSession());
 }
 
 // Extension notification
-extern "C" __declspec(dllexport) void CALLBACK DebugExtensionNotify(ULONG Notify, ULONG64 Argument)
+extern "C" void CALLBACK DebugExtensionNotify(ULONG Notify, ULONG64 Argument)
 {
     // Could handle session changes here if needed
 }
@@ -1038,13 +1037,13 @@ HRESULT CALLBACK agent_impl(PDEBUG_CLIENT Client, PCSTR Args)
 }
 
 // !agent command - main entry point
-extern "C" __declspec(dllexport) HRESULT CALLBACK agent(PDEBUG_CLIENT Client, PCSTR Args)
+extern "C" HRESULT CALLBACK agent(PDEBUG_CLIENT Client, PCSTR Args)
 {
     return agent_impl(Client, Args);
 }
 
 // !ai command - shorthand for "!agent ask"
-extern "C" __declspec(dllexport) HRESULT CALLBACK ai(PDEBUG_CLIENT Client, PCSTR Args)
+extern "C" HRESULT CALLBACK ai(PDEBUG_CLIENT Client, PCSTR Args)
 {
     // Prepend "ask " to make it equivalent to "!agent ask <args>"
     std::string full_args = "ask ";
