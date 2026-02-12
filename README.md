@@ -21,12 +21,18 @@ Supports multiple AI providers:
 git clone --recursive https://github.com/0xeb/windbg-agent.git
 cd windbg-agent
 
-# Configure and build
-cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
-cmake --build build --config Release
+# Build for x64 (most common)
+cmake --preset x64
+cmake --build --preset x64
+
+# Build for x86 (32-bit targets)
+cmake --preset x86
+cmake --build --preset x86
 ```
 
-The extension DLL will be at `build/Release/windbg_agent.dll`.
+Output:
+- **x64**: `build-x64/Release/windbg_agent.dll`
+- **x86**: `build-x86/Release/windbg_agent.dll`
 
 ## Usage
 
@@ -38,6 +44,8 @@ The extension DLL will be at `build/Release/windbg_agent.dll`.
 ```
 .load C:\path\to\windbg_agent.dll
 ```
+
+> **Note:** The extension DLL architecture must match the target. Use the x86 build when debugging 32-bit processes, and the x64 build for 64-bit processes.
 
 ### Commands
 
@@ -52,7 +60,8 @@ The extension DLL will be at `build/Release/windbg_agent.dll`.
 | `!agent prompt` | Show current custom prompt |
 | `!agent prompt <text>` | Set custom prompt (appended to system prompt) |
 | `!agent prompt clear` | Clear custom prompt |
-| `!agent handoff` | Start HTTP server for external tool integration |
+| `!agent http [bind_addr]` | Start HTTP server for external tools (port auto-assigned) |
+| `!agent mcp [bind_addr]` | Start MCP server for MCP-compatible clients |
 | `!agent version prompt` | Show injected system prompt |
 | `!ai <question>` | Shorthand for `!agent ask` |
 
@@ -86,20 +95,21 @@ The extension DLL will be at `build/Release/windbg_agent.dll`.
 !agent clear
 ```
 
-### Handoff (External Tool Integration)
+### HTTP Server (External Tool Integration)
 
 Let external AI agents control the debugger via HTTP:
 
 ```bash
-# In WinDbg - start the handoff server
-!agent handoff
+# In WinDbg - start the HTTP server
+!agent http                  # localhost only (default)
+!agent http 0.0.0.0          # all interfaces (no auth warning)
 
-# From another terminal - use the CLI tool
-windbg_agent.exe --url=http://127.0.0.1:9999 ask "what caused this crash?"
-windbg_agent.exe --url=http://127.0.0.1:9999 exec "kb"
-windbg_agent.exe --url=http://127.0.0.1:9999 interactive
-windbg_agent.exe --url=http://127.0.0.1:9999 status
-windbg_agent.exe --url=http://127.0.0.1:9999 shutdown
+# From another terminal - use the CLI tool (use the URL printed by !agent http)
+windbg_agent.exe --url=http://127.0.0.1:<port> ask "what caused this crash?"
+windbg_agent.exe --url=http://127.0.0.1:<port> exec "kb"
+windbg_agent.exe --url=http://127.0.0.1:<port> interactive
+windbg_agent.exe --url=http://127.0.0.1:<port> status
+windbg_agent.exe --url=http://127.0.0.1:<port> shutdown
 ```
 
 Settings are saved in `%USERPROFILE%\.windbg_agent\settings.json`.
@@ -113,7 +123,7 @@ Settings are saved in `%USERPROFILE%\.windbg_agent\settings.json`.
 - **Conversation continuity**: Follow-up questions remember context
 - **Session persistence**: Claude restores sessions across debugger restarts
 - **Multiple providers**: Switch between Claude and Copilot
-- **Handoff**: Let external AI agents (like Copilot or Claude Code) control the debugger
+- **HTTP Server**: Let external AI agents (like Copilot or Claude Code) control the debugger
 
 ## Screenshots
 
@@ -127,13 +137,13 @@ User asks for decompilation — AI generates readable pseudocode from assembly:
 
 ![Decompilation](assets/decompile.jpg)
 
-### Handoff: External Tool Integration
+### HTTP Server: External Tool Integration
 
-Start `!agent handoff` to let external tools control WinDbg. The CLI executes commands remotely:
+Start `!agent http` to let external tools control WinDbg. The CLI executes commands remotely:
 
 ![Handoff with CLI exec](assets/handoff_exec.jpg)
 
-Claude Code (Opus 4.5) controlling WinDbg via handoff — analyzing a double-free crash:
+Claude Code (Opus 4.5) controlling WinDbg via HTTP server — analyzing a double-free crash:
 
 ![Claude Code controlling WinDbg](assets/handoff_claude_code.jpg)
 

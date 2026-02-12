@@ -11,7 +11,7 @@
 
 namespace windbg_agent {
 
-// Callbacks for handling requests (same as handoff)
+// Callbacks for handling requests (same as http_server)
 using ExecCallback = std::function<std::string(const std::string& command)>;
 using AskCallback = std::function<std::string(const std::string& query)>;
 

@@ -1,4 +1,4 @@
-#include "handoff_server.hpp"
+#include "http_server.hpp"
 
 #include <httplib.h>
 #include <nlohmann/json.hpp>
@@ -13,20 +13,20 @@
 
 namespace windbg_agent {
 
-class HandoffServer::Impl {
+class HttpServer::Impl {
 public:
     httplib::Server server;
 };
 
-HandoffServer::HandoffServer() = default;
+HttpServer::HttpServer() = default;
 
-HandoffServer::~HandoffServer() {
+HttpServer::~HttpServer() {
     stop();
 }
 
-QueueResult HandoffServer::queue_and_wait(PendingCommand::Type type, const std::string& input) {
+QueueResult HttpServer::queue_and_wait(PendingCommand::Type type, const std::string& input) {
     if (!running_.load()) {
-        return {false, "Error: handoff server is not running"};
+        return {false, "Error: HTTP server is not running"};
     }
 
     PendingCommand cmd;
@@ -51,14 +51,14 @@ QueueResult HandoffServer::queue_and_wait(PendingCommand::Type type, const std::
     }
 
     if (!cmd.completed) {
-        return {false, "Error: handoff server stopped"};
+        return {false, "Error: HTTP server stopped"};
     }
 
     return {true, cmd.result};
 }
 
-int HandoffServer::start(int port, ExecCallback exec_cb, AskCallback ask_cb,
-                         const std::string& bind_addr) {
+int HttpServer::start(ExecCallback exec_cb, AskCallback ask_cb,
+                      const std::string& bind_addr) {
     if (running_.load()) {
         return port_;
     }
@@ -69,9 +69,9 @@ int HandoffServer::start(int port, ExecCallback exec_cb, AskCallback ask_cb,
 
     impl_ = std::make_unique<Impl>();
 
-    // bind_to_port returns bool, not the port number
-    bool bound = impl_->server.bind_to_port(bind_addr.c_str(), port);
-    if (!bound) {
+    // Let the OS assign a free port
+    int assigned_port = impl_->server.bind_to_any_port(bind_addr.c_str());
+    if (assigned_port < 0) {
         impl_.reset();
         return -1;
     }
@@ -139,24 +139,24 @@ int HandoffServer::start(int port, ExecCallback exec_cb, AskCallback ask_cb,
         }).detach();
     });
 
-    port_ = port;
+    port_ = assigned_port;
     running_.store(true);
 
     server_thread_ = std::thread([this]() {
         impl_->server.listen_after_bind();
         running_.store(false);
         queue_cv_.notify_all();
-        complete_pending_commands("Error: handoff server stopped");
+        complete_pending_commands("Error: HTTP server stopped");
     });
 
     return port_;
 }
 
-void HandoffServer::set_interrupt_check(std::function<bool()> check) {
+void HttpServer::set_interrupt_check(std::function<bool()> check) {
     interrupt_check_ = check;
 }
 
-void HandoffServer::wait() {
+void HttpServer::wait() {
     while (running_.load()) {
         if (interrupt_check_ && interrupt_check_()) {
             stop();
@@ -204,19 +204,19 @@ void HandoffServer::wait() {
     }
 }
 
-void HandoffServer::stop() {
+void HttpServer::stop() {
     if (impl_) {
         impl_->server.stop();
     }
     running_.store(false);
     queue_cv_.notify_all();
-    complete_pending_commands("Error: handoff server stopped");
+    complete_pending_commands("Error: HTTP server stopped");
     if (server_thread_.joinable()) {
         server_thread_.join();
     }
 }
 
-void HandoffServer::complete_pending_commands(const std::string& result) {
+void HttpServer::complete_pending_commands(const std::string& result) {
     std::queue<PendingCommand*> pending;
     {
         std::lock_guard<std::mutex> lock(queue_mutex_);
@@ -241,38 +241,6 @@ void HandoffServer::complete_pending_commands(const std::string& result) {
     }
 }
 
-int find_free_port(int start_port) {
-    WSADATA wsa_data;
-    if (WSAStartup(MAKEWORD(2, 2), &wsa_data) != 0) {
-        return start_port;
-    }
-
-    int found_port = start_port;
-
-    for (int port = start_port; port < start_port + 100; port++) {
-        SOCKET sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-        if (sock == INVALID_SOCKET) {
-            continue;
-        }
-
-        sockaddr_in addr{};
-        addr.sin_family = AF_INET;
-        addr.sin_addr.s_addr = inet_addr("127.0.0.1");
-        addr.sin_port = htons(static_cast<u_short>(port));
-
-        int result = bind(sock, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
-        closesocket(sock);
-
-        if (result == 0) {
-            found_port = port;
-            break;
-        }
-    }
-
-    WSACleanup();
-    return found_port;
-}
-
 bool copy_to_clipboard(const std::string& text) {
     if (!OpenClipboard(nullptr)) {
         return false;
@@ -295,14 +263,14 @@ bool copy_to_clipboard(const std::string& text) {
     return true;
 }
 
-std::string format_handoff_info(
+std::string format_http_info(
     const std::string& target_name,
     unsigned long pid,
     const std::string& state,
     const std::string& url
 ) {
     std::ostringstream ss;
-    ss << "DEBUGGER HANDOFF ACTIVE\n";
+    ss << "HTTP SERVER ACTIVE\n";
     ss << "Target: " << target_name << " (PID " << pid << ")\n";
     ss << "State: " << state << "\n";
     ss << "URL: " << url << "\n\n";

@@ -7,20 +7,16 @@
 #include <string>
 #include <windows.h>
 
-#include "handoff_server.hpp"
+#include "http_server.hpp"
 #include "mcp_server.hpp"
 #include "session_store.hpp"
 #include "settings.hpp"
 #include "system_prompt.hpp"
+#include "version.h"
 #include "windbg_client.hpp"
 
 #include <libagents/agent.hpp>
 #include <libagents/tool_builder.hpp>
-
-// Version info
-#define WINDBG_AGENT_VERSION_MAJOR 1
-#define WINDBG_AGENT_VERSION_MINOR 0
-#define WINDBG_AGENT_VERSION_PATCH 0
 
 // Set to 1 to disable session management (for debugging MCP tool visibility issues)
 #define WINDBG_AGENT_DISABLE_SESSIONS 0
@@ -388,8 +384,8 @@ HRESULT CALLBACK agent_impl(PDEBUG_CLIENT Client, PCSTR Args)
             "  prompt clear          Clear custom prompt\n"
             "  timeout               Show response timeout\n"
             "  timeout <ms>          Set response timeout (e.g., 120000 = 2 min)\n"
-            "  handoff               Start handoff server for external tools\n"
-            "  mcp                   Start MCP server for MCP-compatible clients\n"
+            "  http [bind_addr]      Start HTTP server for external tools (port auto-assigned)\n"
+            "  mcp [bind_addr]       Start MCP server for MCP-compatible clients\n"
             "  byok                  Show BYOK (Bring Your Own Key) status\n"
             "  byok enable|disable   Enable or disable BYOK for current provider\n"
             "  byok key <value>      Set BYOK API key\n"
@@ -721,10 +717,10 @@ HRESULT CALLBACK agent_impl(PDEBUG_CLIENT Client, PCSTR Args)
             control->Output(DEBUG_OUTPUT_NORMAL, "Use '!agent byok' to see available commands.\n");
         }
     }
-    else if (subcmd == "handoff")
+    else if (subcmd == "http")
     {
-        // Start handoff server for external tool integration
-        // Usage: !agent handoff [bind_addr]
+        // Start HTTP server for external tool integration
+        // Usage: !agent http [bind_addr]
         // bind_addr: "127.0.0.1" (default, localhost only) or "0.0.0.0" (all interfaces)
         windbg_agent::WinDbgClient dbg_client(Client);
         auto settings = windbg_agent::LoadSettings();
@@ -743,9 +739,12 @@ HRESULT CALLBACK agent_impl(PDEBUG_CLIENT Client, PCSTR Args)
                 bind_addr = bind_addr.substr(start, end - start + 1);
         }
 
-        // Find a free port
-        int port = windbg_agent::find_free_port();
-        std::string url = "http://" + bind_addr + ":" + std::to_string(port);
+        if (bind_addr != "127.0.0.1")
+        {
+            control->Output(DEBUG_OUTPUT_WARNING,
+                "WARNING: Binding to non-loopback address '%s'. "
+                "The server has no authentication.\n", bind_addr.c_str());
+        }
 
         // Get target state
         std::string state = dbg_client.GetTargetState();
@@ -802,46 +801,46 @@ HRESULT CALLBACK agent_impl(PDEBUG_CLIENT Client, PCSTR Args)
             }
         };
 
-        // Start the handoff server
-        static windbg_agent::HandoffServer handoff_server;
-        if (handoff_server.is_running())
+        // Start the HTTP server (OS assigns port)
+        static windbg_agent::HttpServer http_server;
+        if (http_server.is_running())
         {
             control->Output(DEBUG_OUTPUT_ERROR,
-                            "Handoff server already running. Stop it before starting a new one.\n");
+                            "HTTP server already running. Stop it before starting a new one.\n");
             control->Release();
             return E_FAIL;
         }
-        int actual_port = handoff_server.start(port, exec_cb, ask_cb, bind_addr);
+        int actual_port = http_server.start(exec_cb, ask_cb, bind_addr);
         if (actual_port <= 0)
         {
             control->Output(DEBUG_OUTPUT_ERROR,
-                            "Failed to start handoff server (port %d unavailable).\n", port);
+                            "Failed to start HTTP server.\n");
             control->Release();
             return E_FAIL;
         }
-        url = "http://" + bind_addr + ":" + std::to_string(actual_port);
+        std::string url = "http://" + http_server.bind_addr() + ":" + std::to_string(http_server.port());
 
-        // Format and output handoff info
-        std::string handoff_info =
-            windbg_agent::format_handoff_info(target, pid, state, url);
-        control->Output(DEBUG_OUTPUT_NORMAL, "%s\n", handoff_info.c_str());
+        // Format and output HTTP server info
+        std::string http_info =
+            windbg_agent::format_http_info(target, pid, state, url);
+        control->Output(DEBUG_OUTPUT_NORMAL, "%s\n", http_info.c_str());
 
         // Copy to clipboard
-        if (windbg_agent::copy_to_clipboard(handoff_info))
+        if (windbg_agent::copy_to_clipboard(http_info))
         {
             control->Output(DEBUG_OUTPUT_NORMAL, "[Copied to clipboard]\n");
         }
 
-        control->Output(DEBUG_OUTPUT_NORMAL, "Press Ctrl+C to stop handoff.\n");
+        control->Output(DEBUG_OUTPUT_NORMAL, "Press Ctrl+C to stop HTTP server.\n");
 
-        // Set up interrupt check - stop handoff when user presses Ctrl+C
-        handoff_server.set_interrupt_check([&dbg_client]() {
+        // Set up interrupt check - stop server when user presses Ctrl+C
+        http_server.set_interrupt_check([&dbg_client]() {
             return dbg_client.IsInterrupted();
         });
 
         // Block until server stops (user presses Ctrl+C or sends /shutdown)
-        handoff_server.wait();
-        control->Output(DEBUG_OUTPUT_NORMAL, "Handoff server stopped.\n");
+        http_server.wait();
+        control->Output(DEBUG_OUTPUT_NORMAL, "HTTP server stopped.\n");
     }
     else if (subcmd == "mcp")
     {
@@ -864,9 +863,16 @@ HRESULT CALLBACK agent_impl(PDEBUG_CLIENT Client, PCSTR Args)
                 bind_addr = bind_addr.substr(start, end - start + 1);
         }
 
-        // Find a free port (start from 9998 to avoid conflict with default handoff port)
-        int port = windbg_agent::find_free_port(9998);
-        std::string url = "http://" + bind_addr + ":" + std::to_string(port);
+        if (bind_addr != "127.0.0.1")
+        {
+            control->Output(DEBUG_OUTPUT_WARNING,
+                "WARNING: Binding to non-loopback address '%s'. "
+                "The server has no authentication.\n", bind_addr.c_str());
+        }
+
+        // Port 0 lets the MCP server pick a free port
+        int port = 0;
+        std::string url;
 
         // Get target state
         std::string state = dbg_client.GetTargetState();
@@ -936,7 +942,7 @@ HRESULT CALLBACK agent_impl(PDEBUG_CLIENT Client, PCSTR Args)
         if (actual_port <= 0)
         {
             control->Output(DEBUG_OUTPUT_ERROR,
-                            "Failed to start MCP server (port %d unavailable).\n", port);
+                            "Failed to start MCP server.\n");
             control->Release();
             return E_FAIL;
         }

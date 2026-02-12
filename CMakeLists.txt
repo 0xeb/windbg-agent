@@ -1,5 +1,8 @@
 cmake_minimum_required(VERSION 3.20)
-project(windbg_agent VERSION 1.0.3 LANGUAGES CXX)
+project(windbg_agent VERSION 1.0.4 LANGUAGES CXX)
+
+# Generate version.h from template — single source of truth for version numbers
+configure_file(version.h.in "${CMAKE_CURRENT_BINARY_DIR}/version.h" @ONLY)
 
 # C++ Standard
 set(CMAKE_CXX_STANDARD 17)
@@ -21,7 +24,7 @@ if(NOT TARGET libagents)
     add_subdirectory(external/libagents)
 endif()
 
-# Fetch cpp-httplib for handoff server and CLI
+# Fetch cpp-httplib for HTTP server and CLI
 include(FetchContent)
 FetchContent_Declare(
     cpp_httplib
@@ -38,7 +41,7 @@ add_library(windbg_agent SHARED
     session_store.cpp
     dml_output.cpp
     windbg_client.cpp
-    handoff_server.cpp
+    http_server.cpp
     mcp_server.cpp
 )
 
@@ -52,11 +55,11 @@ target_link_libraries(windbg_agent
         fastmcpp_core     # MCP server library (via libagents/claude-agent-sdk-cpp)
         dbgeng            # Debugging Engine API
         dbghelp           # Debug Help Library
-        ws2_32            # Winsock for handoff server
+        ws2_32            # Winsock for HTTP server
 )
 
-# Include httplib headers (no OpenSSL needed for localhost)
-target_include_directories(windbg_agent PRIVATE ${cpp_httplib_SOURCE_DIR})
+# Include httplib headers (no OpenSSL needed for localhost) and generated version.h
+target_include_directories(windbg_agent PRIVATE ${cpp_httplib_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
 
 # Export symbols for WinDbg extension callbacks
 target_compile_definitions(windbg_agent PRIVATE
@@ -99,32 +102,30 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/repro/CMakeLists.txt")
 endif()
 
 # ============================================================================
-# Handoff CLI executable
+# HTTP server CLI executable (disabled — source stays in cli/ for future use)
 # ============================================================================
-add_executable(windbg_agent_cli
-    cli/main.cpp
-    settings.cpp
-)
-
-target_include_directories(windbg_agent_cli PRIVATE
-    ${cpp_httplib_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}
-)
-
-# nlohmann/json is available through libagents dependencies
-target_link_libraries(windbg_agent_cli PRIVATE
-    libagents
-    nlohmann_json::nlohmann_json
-    ws2_32
-)
-
-# Output as windbg_agent.exe
-set_target_properties(windbg_agent_cli PROPERTIES
-    OUTPUT_NAME "windbg_agent"
-)
-
-# Static runtime for standalone distribution
-set_target_properties(windbg_agent_cli PROPERTIES
-    MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
-)
+# add_executable(windbg_agent_cli
+#     cli/main.cpp
+#     settings.cpp
+# )
+#
+# target_include_directories(windbg_agent_cli PRIVATE
+#     ${cpp_httplib_SOURCE_DIR}
+#     ${CMAKE_CURRENT_SOURCE_DIR}
+#     ${CMAKE_CURRENT_BINARY_DIR}
+# )
+#
+# target_link_libraries(windbg_agent_cli PRIVATE
+#     libagents
+#     nlohmann_json::nlohmann_json
+#     ws2_32
+# )
+#
+# set_target_properties(windbg_agent_cli PROPERTIES
+#     OUTPUT_NAME "windbg_agent"
+# )
+#
+# set_target_properties(windbg_agent_cli PROPERTIES
+#     MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
+# )
 

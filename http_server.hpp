@@ -31,20 +31,20 @@ struct QueueResult {
     std::string payload;
 };
 
-class HandoffServer {
+class HttpServer {
 public:
-    HandoffServer();
-    ~HandoffServer();
+    HttpServer();
+    ~HttpServer();
 
     // Non-copyable
-    HandoffServer(const HandoffServer&) = delete;
-    HandoffServer& operator=(const HandoffServer&) = delete;
+    HttpServer(const HttpServer&) = delete;
+    HttpServer& operator=(const HttpServer&) = delete;
 
-    // Start server on given port with callbacks
-    // Returns actual port used (may differ if auto-assigned)
+    // Start server with OS-assigned port
+    // Returns actual port used
     // Callbacks will be called on the main thread (in wait())
     // bind_addr: "127.0.0.1" for localhost only, "0.0.0.0" for all interfaces
-    int start(int port, ExecCallback exec_cb, AskCallback ask_cb,
+    int start(ExecCallback exec_cb, AskCallback ask_cb,
               const std::string& bind_addr = "127.0.0.1");
 
     // Block until server stops, processing commands on the calling thread
@@ -92,14 +92,11 @@ private:
     void complete_pending_commands(const std::string& result);
 };
 
-// Find a free port starting from start_port
-int find_free_port(int start_port = 9999);
-
 // Copy text to Windows clipboard
 bool copy_to_clipboard(const std::string& text);
 
-// Format handoff info for display and clipboard
-std::string format_handoff_info(
+// Format HTTP server info for display and clipboard
+std::string format_http_info(
     const std::string& target_name,
     unsigned long pid,
     const std::string& state,
