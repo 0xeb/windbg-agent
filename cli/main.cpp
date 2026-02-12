@@ -7,6 +7,34 @@
 
 #include "../settings.hpp"
 
+// TODO: Evolve windbg_agent.exe into a standalone headless debugger.
+//
+// Currently this is an HTTP client that talks to a running !agent http server
+// inside WinDbg/CDB. The goal is to make it a self-contained tool that:
+//
+//   1. Host dbgeng directly — call DebugCreate() to get IDebugClient, attach
+//      to processes (CreateProcess/AttachProcess) or open dumps (OpenDumpFile),
+//      and run a debugger event loop. Essentially a programmable cdb.exe.
+//
+//   2. Serve HTTP/MCP — reuse the existing HttpServer and MCPServer to expose
+//      /exec, /ask, /status, /shutdown endpoints. External AI agents (Claude
+//      Code, Copilot, etc.) connect here to drive the debugger.
+//
+//   3. Keep the current HTTP client mode — when --url is given or no target is
+//      specified, behave as today: forward commands to a remote server.
+//
+// This turns a single binary into both the debugger and its integration layer:
+//   windbg_agent.exe -z crash.dmp --serve        # open dump + start server
+//   windbg_agent.exe -p 1234 --serve              # attach to PID + serve
+//   windbg_agent.exe --url=http://... exec "kb"   # client mode (current)
+//
+// Key pieces needed:
+//   - Debugger init: DebugCreate(), IDebugClient, IDebugControl
+//   - Target management: -z (dump), -p (attach), spawn process
+//   - Event loop: WaitForEvent / DispatchCallbacks
+//   - Console output: replace DML with plain-text for headless use
+//   - HttpServer/MCPServer already work standalone (no WinDbg dependency)
+
 void print_usage() {
     std::cerr << "Usage: windbg_agent.exe [--url=URL] <command> [args]\n\n";
     std::cerr << "Commands:\n";
@@ -14,7 +42,7 @@ void print_usage() {
     std::cerr << "  ask <question>   AI-assisted query with reasoning\n";
     std::cerr << "  interactive      Start interactive chat session\n";
     std::cerr << "  status           Check server status\n";
-    std::cerr << "  shutdown         Stop handoff server\n\n";
+    std::cerr << "  shutdown         Stop HTTP server\n\n";
     std::cerr << "Config commands (no server required):\n";
     std::cerr << "  config show              Show all settings\n";
     std::cerr << "  config provider <name>   Set default provider (claude, copilot)\n";
@@ -26,26 +54,26 @@ void print_usage() {
     std::cerr << "  config byok enable       Enable BYOK\n";
     std::cerr << "  config byok disable      Disable BYOK\n\n";
     std::cerr << "Environment:\n";
-    std::cerr << "  WINDBG_COPILOT_URL   Default handoff URL (default: http://127.0.0.1:9999)\n";
+    std::cerr << "  WINDBG_AGENT_URL     HTTP server URL (default: http://127.0.0.1:9999)\n";
 }
 
 std::string get_url(int argc, char* argv[]) {
-    // Priority: --url=X flag > WINDBG_COPILOT_URL env > default
+    // Priority: --url=X flag > WINDBG_AGENT_URL env > default
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
         if (arg.rfind("--url=", 0) == 0) {
             return arg.substr(6);
         }
     }
-    if (const char* env = std::getenv("WINDBG_COPILOT_URL")) {
+    if (const char* env = std::getenv("WINDBG_AGENT_URL")) {
         return env;
     }
     return "http://127.0.0.1:9999";
 }
 
-class HandoffClient {
+class HttpClient {
 public:
-    explicit HandoffClient(const std::string& url) : url_(url) {
+    explicit HttpClient(const std::string& url) : url_(url) {
         // Parse host and port from URL
         // Format: http://host:port
         std::string host_port = url;
@@ -62,7 +90,7 @@ public:
         auto res = client_->Post("/exec", body.dump(), "application/json");
 
         if (!res) {
-            throw std::runtime_error("Connection failed - is handoff server running?");
+            throw std::runtime_error("Connection failed - is HTTP server running?");
         }
         if (res->status != 200) {
             auto json = nlohmann::json::parse(res->body);
@@ -78,7 +106,7 @@ public:
         auto res = client_->Post("/ask", body.dump(), "application/json");
 
         if (!res) {
-            throw std::runtime_error("Connection failed - is handoff server running?");
+            throw std::runtime_error("Connection failed - is HTTP server running?");
         }
         if (res->status != 200) {
             auto json = nlohmann::json::parse(res->body);
@@ -92,7 +120,7 @@ public:
     std::string status() {
         auto res = client_->Get("/status");
         if (!res) {
-            throw std::runtime_error("Connection failed - is handoff server running?");
+            throw std::runtime_error("Connection failed - is HTTP server running?");
         }
         return res->body;
     }
@@ -100,7 +128,7 @@ public:
     void shutdown() {
         auto res = client_->Post("/shutdown", "", "application/json");
         if (!res) {
-            throw std::runtime_error("Connection failed - is handoff server running?");
+            throw std::runtime_error("Connection failed - is HTTP server running?");
         }
     }
 
@@ -238,8 +266,8 @@ int run_config(int argc, char* argv[], int cmd_idx) {
     return 1;
 }
 
-void run_interactive(HandoffClient& client) {
-    std::cout << "Connected to handoff server. Type 'exit' to quit.\n\n";
+void run_interactive(HttpClient& client) {
+    std::cout << "Connected to HTTP server. Type 'exit' to quit.\n\n";
     std::string input;
 
     while (true) {
@@ -299,7 +327,7 @@ int main(int argc, char* argv[]) {
     }
 
     try {
-        HandoffClient client(url);
+        HttpClient client(url);
 
         if (command == "exec") {
             if (args.empty()) {
@@ -327,7 +355,7 @@ int main(int argc, char* argv[]) {
         }
         else if (command == "shutdown") {
             client.shutdown();
-            std::cout << "Handoff server stopped.\n";
+            std::cout << "HTTP server stopped.\n";
             return 0;
         }
         else {

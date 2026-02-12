@@ -21,7 +21,7 @@ if(NOT TARGET libagents)
     add_subdirectory(external/libagents)
 endif()
 
-# Fetch cpp-httplib for handoff server and CLI
+# Fetch cpp-httplib for HTTP server and CLI
 include(FetchContent)
 FetchContent_Declare(
     cpp_httplib
@@ -38,7 +38,7 @@ add_library(windbg_agent SHARED
     session_store.cpp
     dml_output.cpp
     windbg_client.cpp
-    handoff_server.cpp
+    http_server.cpp
     mcp_server.cpp
 )
 
@@ -52,7 +52,7 @@ target_link_libraries(windbg_agent
         fastmcpp_core     # MCP server library (via libagents/claude-agent-sdk-cpp)
         dbgeng            # Debugging Engine API
         dbghelp           # Debug Help Library
-        ws2_32            # Winsock for handoff server
+        ws2_32            # Winsock for HTTP server
 )
 
 # Include httplib headers (no OpenSSL needed for localhost)
@@ -99,7 +99,7 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/repro/CMakeLists.txt")
 endif()
 
 # ============================================================================
-# Handoff CLI executable
+# HTTP server CLI executable
 # ============================================================================
 add_executable(windbg_agent_cli
     cli/main.cpp
