@@ -12,15 +12,11 @@
 #include "session_store.hpp"
 #include "settings.hpp"
 #include "system_prompt.hpp"
+#include "version.h"
 #include "windbg_client.hpp"
 
 #include <libagents/agent.hpp>
 #include <libagents/tool_builder.hpp>
-
-// Version info
-#define WINDBG_AGENT_VERSION_MAJOR 1
-#define WINDBG_AGENT_VERSION_MINOR 0
-#define WINDBG_AGENT_VERSION_PATCH 0
 
 // Set to 1 to disable session management (for debugging MCP tool visibility issues)
 #define WINDBG_AGENT_DISABLE_SESSIONS 0
