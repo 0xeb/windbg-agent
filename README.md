@@ -10,7 +10,7 @@ Supports multiple AI providers:
 
 ### Prerequisites
 - Windows 10/11
-- Visual Studio 2022 with C++ workload
+- Visual Studio 2022 with C++ workload (2019 also works — [see below](#alternative-no-visual-studio-2022))
 - CMake 3.20+
 - Windows SDK (for dbgeng.h)
 
@@ -33,6 +33,26 @@ cmake --build --preset x86
 Output:
 - **x64**: `build-x64/Release/windbg_agent.dll`
 - **x86**: `build-x86/Release/windbg_agent.dll`
+
+### Alternative: No Visual Studio 2022
+
+If you have a different Visual Studio version or just the Build Tools, skip the presets and specify the generator manually:
+
+```bash
+# Visual Studio 2019 — x64
+cmake -B build-x64 -G "Visual Studio 16 2019" -A x64
+cmake --build build-x64 --config Release
+
+# Visual Studio 2019 — x86 (32-bit targets)
+cmake -B build-x86 -G "Visual Studio 16 2019" -A Win32
+cmake --build build-x86 --config Release
+
+# Ninja (works with any MSVC version — run from Developer Command Prompt)
+cmake -B build-x64 -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build-x64
+```
+
+> **Ninja x86 note**: For 32-bit Ninja builds, open the **x86 Native Tools Command Prompt** (instead of x64) so `cl.exe` targets Win32.
 
 ## Usage
 
