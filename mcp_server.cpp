@@ -1,7 +1,7 @@
 #include "mcp_server.hpp"
 
 #include <fastmcpp/mcp/handler.hpp>
-#include <fastmcpp/server/sse_server.hpp>
+#include <fastmcpp/server/streamable_http_server.hpp>
 #include <fastmcpp/tools/manager.hpp>
 #include <fastmcpp/tools/tool.hpp>
 #include <nlohmann/json.hpp>
@@ -16,7 +16,7 @@ using Json = nlohmann::json;
 class MCPServer::Impl {
 public:
     fastmcpp::tools::ToolManager tool_manager;
-    std::unique_ptr<fastmcpp::server::SseServerWrapper> server;
+    std::unique_ptr<fastmcpp::server::StreamableHttpServerWrapper> server;
 };
 
 MCPServer::MCPServer() = default;
@@ -101,17 +101,18 @@ int MCPServer::start(int port, ExecCallback exec_cb, AskCallback ask_cb,
                     {"content", Json::array({
                         Json{{"type", "text"}, {"text", "Error: missing command"}}
                     })},
+                    {"structuredContent", Json{{"output", "Error: missing command"}, {"success", false}}},
                     {"isError", true}
                 };
             }
 
             auto result = queue_and_wait(MCPPendingCommand::Type::Exec, command);
 
-            // MCP tools/call expects content array format
             return Json{
                 {"content", Json::array({
                     Json{{"type", "text"}, {"text", result.payload}}
                 })},
+                {"structuredContent", Json{{"output", result.payload}, {"success", result.success}}},
                 {"isError", !result.success}
             };
         }
@@ -150,6 +151,7 @@ int MCPServer::start(int port, ExecCallback exec_cb, AskCallback ask_cb,
                     {"content", Json::array({
                         Json{{"type", "text"}, {"text", "Error: missing query"}}
                     })},
+                    {"structuredContent", Json{{"response", "Error: missing query"}, {"success", false}}},
                     {"isError", true}
                 };
             }
@@ -160,6 +162,7 @@ int MCPServer::start(int port, ExecCallback exec_cb, AskCallback ask_cb,
                 {"content", Json::array({
                     Json{{"type", "text"}, {"text", result.payload}}
                 })},
+                {"structuredContent", Json{{"response", result.payload}, {"success", result.success}}},
                 {"isError", !result.success}
             };
         }
@@ -180,13 +183,12 @@ int MCPServer::start(int port, ExecCallback exec_cb, AskCallback ask_cb,
         descriptions
     );
 
-    // Create and start SSE server
-    impl_->server = std::make_unique<fastmcpp::server::SseServerWrapper>(
+    // Create and start Streamable HTTP server
+    impl_->server = std::make_unique<fastmcpp::server::StreamableHttpServerWrapper>(
         handler,
         bind_addr_,
         port,
-        "/sse",
-        "/messages"
+        "/mcp"
     );
 
     if (!impl_->server->start()) {
@@ -194,7 +196,13 @@ int MCPServer::start(int port, ExecCallback exec_cb, AskCallback ask_cb,
         return -1;
     }
 
-    port_ = port;
+    port_ = impl_->server->port();
+    if (port_ <= 0) {
+        impl_->server->stop();
+        impl_.reset();
+        return -1;
+    }
+
     running_.store(true);
 
     return port_;
@@ -293,8 +301,8 @@ std::string format_mcp_info(
     ss << "MCP SERVER ACTIVE\n";
     ss << "Target: " << target_name << " (PID " << pid << ")\n";
     ss << "State: " << state << "\n";
-    ss << "SSE Endpoint: " << url << "/sse\n";
-    ss << "Message Endpoint: " << url << "/messages\n\n";
+    ss << "MCP Endpoint: " << url << "/mcp\n";
+    ss << "Transport: Streamable HTTP\n\n";
 
     ss << "AVAILABLE TOOLS:\n";
     ss << "  dbg_exec  - Execute a debugger command\n";
@@ -305,21 +313,22 @@ std::string format_mcp_info(
     ss << "{\n";
     ss << "  \"mcpServers\": {\n";
     ss << "    \"windbg-agent\": {\n";
-    ss << "      \"url\": \"" << url << "/sse\"\n";
+    ss << "      \"url\": \"" << url << "/mcp\"\n";
     ss << "    }\n";
     ss << "  }\n";
     ss << "}\n\n";
 
     ss << "EXAMPLE CURL COMMANDS:\n";
-    ss << "  # List available tools\n";
-    ss << "  curl -X POST " << url << "/messages \\\n";
+    ss << "  # Initialize session (inspect Mcp-Session-Id response header)\n";
+    ss << "  curl -i -X POST " << url << "/mcp \\\n";
     ss << "    -H \"Content-Type: application/json\" \\\n";
-    ss << "    -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\",\"params\":{}}'\n\n";
+    ss << "    -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-03-26\",\"capabilities\":{},\"clientInfo\":{\"name\":\"curl\",\"version\":\"1.0\"}}}'\n\n";
 
-    ss << "  # Execute a debugger command\n";
-    ss << "  curl -X POST " << url << "/messages \\\n";
+    ss << "  # List tools using the returned Mcp-Session-Id\n";
+    ss << "  curl -X POST " << url << "/mcp \\\n";
     ss << "    -H \"Content-Type: application/json\" \\\n";
-    ss << "    -d '{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"dbg_exec\",\"arguments\":{\"command\":\"kb\"}}}'\n";
+    ss << "    -H \"Mcp-Session-Id: <session-id>\" \\\n";
+    ss << "    -d '{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}'\n";
 
     return ss.str();
 }

@@ -24,6 +24,11 @@ if(NOT TARGET libagents)
     add_subdirectory(external/libagents)
 endif()
 
+# Add fastmcpp if not already added by libagents
+if(NOT TARGET fastmcpp_core AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/external/libagents/external/fastmcpp/CMakeLists.txt")
+    add_subdirectory(external/libagents/external/fastmcpp)
+endif()
+
 # Fetch cpp-httplib for HTTP server and CLI
 include(FetchContent)
 FetchContent_Declare(
