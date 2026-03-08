@@ -10,6 +10,7 @@ WinDbgClient::WinDbgClient(IDebugClient* client) : client_(client), control_(nul
 {
     if (client_)
     {
+        client_->AddRef();
         client_->QueryInterface(__uuidof(IDebugControl), (void**)&control_);
         if (control_)
             dml_ = std::make_unique<DmlOutput>(control_);
@@ -22,6 +23,12 @@ WinDbgClient::~WinDbgClient()
     {
         control_->Release();
         control_ = nullptr;
+    }
+
+    if (client_)
+    {
+        client_->Release();
+        client_ = nullptr;
     }
 }
 

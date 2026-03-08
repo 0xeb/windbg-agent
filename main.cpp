@@ -4,7 +4,9 @@
 #include <ctime>
 #include <dbgeng.h>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <windows.h>
 
 #include "http_server.hpp"
@@ -103,6 +105,26 @@ struct AgentSession
     libagents::HostContext host;
 };
 
+struct MCPBackgroundState
+{
+    std::mutex mutex;
+    std::thread worker;
+    std::shared_ptr<windbg_agent::WinDbgClient> dbg_client;
+    std::shared_ptr<AgentSession> session;
+    std::string bind_addr;
+    std::string url;
+};
+
+struct HTTPBackgroundState
+{
+    std::mutex mutex;
+    std::thread worker;
+    std::shared_ptr<windbg_agent::WinDbgClient> dbg_client;
+    std::shared_ptr<AgentSession> session;
+    std::string bind_addr;
+    std::string url;
+};
+
 // Helper to get IDebugControl for output
 static IDebugControl* GetControl(PDEBUG_CLIENT Client)
 {
@@ -115,6 +137,141 @@ static AgentSession& GetAgentSession()
 {
     static AgentSession session;
     return session;
+}
+
+static windbg_agent::HttpServer& GetHTTPServer()
+{
+    static windbg_agent::HttpServer server;
+    return server;
+}
+
+static HTTPBackgroundState& GetHTTPBackgroundState()
+{
+    static HTTPBackgroundState state;
+    return state;
+}
+
+static windbg_agent::MCPServer& GetMCPServer()
+{
+    static windbg_agent::MCPServer server;
+    return server;
+}
+
+static MCPBackgroundState& GetMCPBackgroundState()
+{
+    static MCPBackgroundState state;
+    return state;
+}
+
+static std::shared_ptr<windbg_agent::WinDbgClient> CreatePersistentWinDbgClient(PDEBUG_CLIENT Client)
+{
+    IDebugClient* persistent_client = nullptr;
+    if (FAILED(Client->CreateClient(&persistent_client)) || !persistent_client)
+        return std::make_shared<windbg_agent::WinDbgClient>(Client);
+
+    auto dbg_client = std::make_shared<windbg_agent::WinDbgClient>(persistent_client);
+    persistent_client->Release();
+    return dbg_client;
+}
+
+static void CleanupStoppedMCPWorker()
+{
+    auto& state = GetMCPBackgroundState();
+    std::thread worker_to_join;
+
+    {
+        std::lock_guard<std::mutex> lock(state.mutex);
+        if (GetMCPServer().is_running() || !state.worker.joinable())
+            return;
+
+        worker_to_join = std::move(state.worker);
+        state.dbg_client.reset();
+        state.session.reset();
+        state.bind_addr.clear();
+        state.url.clear();
+    }
+
+    if (worker_to_join.joinable())
+        worker_to_join.join();
+}
+
+static void CleanupStoppedHTTPWorker()
+{
+    auto& state = GetHTTPBackgroundState();
+    std::thread worker_to_join;
+
+    {
+        std::lock_guard<std::mutex> lock(state.mutex);
+        if (GetHTTPServer().is_running() || !state.worker.joinable())
+            return;
+
+        worker_to_join = std::move(state.worker);
+        state.dbg_client.reset();
+        state.session.reset();
+        state.bind_addr.clear();
+        state.url.clear();
+    }
+
+    if (worker_to_join.joinable())
+        worker_to_join.join();
+}
+
+static void StopHTTPBackgroundServer()
+{
+    CleanupStoppedHTTPWorker();
+
+    auto& server = GetHTTPServer();
+    auto& state = GetHTTPBackgroundState();
+    std::thread worker_to_join;
+
+    {
+        std::lock_guard<std::mutex> lock(state.mutex);
+        if (state.worker.joinable())
+            worker_to_join = std::move(state.worker);
+    }
+
+    if (server.is_running())
+        server.stop();
+
+    if (worker_to_join.joinable())
+        worker_to_join.join();
+
+    {
+        std::lock_guard<std::mutex> lock(state.mutex);
+        state.dbg_client.reset();
+        state.session.reset();
+        state.bind_addr.clear();
+        state.url.clear();
+    }
+}
+
+static void StopMCPBackgroundServer()
+{
+    CleanupStoppedMCPWorker();
+
+    auto& server = GetMCPServer();
+    auto& state = GetMCPBackgroundState();
+    std::thread worker_to_join;
+
+    {
+        std::lock_guard<std::mutex> lock(state.mutex);
+        if (state.worker.joinable())
+            worker_to_join = std::move(state.worker);
+    }
+
+    if (server.is_running())
+        server.stop();
+
+    if (worker_to_join.joinable())
+        worker_to_join.join();
+
+    {
+        std::lock_guard<std::mutex> lock(state.mutex);
+        state.dbg_client.reset();
+        state.session.reset();
+        state.bind_addr.clear();
+        state.url.clear();
+    }
 }
 
 static void ResetAgentSession(AgentSession& session)
@@ -131,6 +288,7 @@ static void ResetAgentSession(AgentSession& session)
     session.system_prompt.clear();
     session.target.clear();
     session.primed = false;
+    session.dbg = nullptr;
 }
 
 static libagents::Tool BuildDebuggerTool(AgentSession& session)
@@ -317,6 +475,8 @@ extern "C" HRESULT CALLBACK DebugExtensionInitialize(PULONG Version, PULONG Flag
 // Extension cleanup
 extern "C" void CALLBACK DebugExtensionUninitialize()
 {
+    StopHTTPBackgroundServer();
+    StopMCPBackgroundServer();
     ResetAgentSession(GetAgentSession());
 }
 
@@ -384,8 +544,12 @@ HRESULT CALLBACK agent_impl(PDEBUG_CLIENT Client, PCSTR Args)
             "  prompt clear          Clear custom prompt\n"
             "  timeout               Show response timeout\n"
             "  timeout <ms>          Set response timeout (e.g., 120000 = 2 min)\n"
-            "  http [bind_addr]      Start HTTP server for external tools (port auto-assigned)\n"
-            "  mcp [bind_addr]       Start MCP server for MCP-compatible clients\n"
+            "  http [bind_addr]      Start HTTP server for external tools in background\n"
+            "  http status           Show HTTP server status\n"
+            "  http stop             Stop the HTTP server\n"
+            "  mcp [bind_addr]       Start MCP server for MCP-compatible clients in background\n"
+            "  mcp status            Show MCP server status\n"
+            "  mcp stop              Stop the MCP server\n"
             "  byok                  Show BYOK (Bring Your Own Key) status\n"
             "  byok enable|disable   Enable or disable BYOK for current provider\n"
             "  byok key <value>      Set BYOK API key\n"
@@ -719,256 +883,359 @@ HRESULT CALLBACK agent_impl(PDEBUG_CLIENT Client, PCSTR Args)
     }
     else if (subcmd == "http")
     {
-        // Start HTTP server for external tool integration
-        // Usage: !agent http [bind_addr]
-        // bind_addr: "127.0.0.1" (default, localhost only) or "0.0.0.0" (all interfaces)
-        windbg_agent::WinDbgClient dbg_client(Client);
-        auto settings = windbg_agent::LoadSettings();
-        auto& session = GetAgentSession();
-        std::string target = dbg_client.GetTargetName();
+        CleanupStoppedHTTPWorker();
 
-        // Parse optional bind address
-        std::string bind_addr = "127.0.0.1";
-        if (!rest.empty())
+        auto& http_server = GetHTTPServer();
+        auto& http_state = GetHTTPBackgroundState();
+
+        if (rest == "status")
         {
-            bind_addr = rest;
-            // Trim whitespace
-            size_t start = bind_addr.find_first_not_of(" \t");
-            size_t end = bind_addr.find_last_not_of(" \t");
-            if (start != std::string::npos)
-                bind_addr = bind_addr.substr(start, end - start + 1);
-        }
-
-        if (bind_addr != "127.0.0.1")
-        {
-            control->Output(DEBUG_OUTPUT_WARNING,
-                "WARNING: Binding to non-loopback address '%s'. "
-                "The server has no authentication.\n", bind_addr.c_str());
-        }
-
-        // Get target state
-        std::string state = dbg_client.GetTargetState();
-        ULONG pid = dbg_client.GetProcessId();
-
-        // Create exec callback - executes debugger commands
-        windbg_agent::ExecCallback exec_cb = [&dbg_client](const std::string& command) -> std::string
-        {
-            return dbg_client.ExecuteCommand(command);
-        };
-
-        // Create ask callback - routes through same AI path as !agent ask
-        windbg_agent::AskCallback ask_cb = [Client, &settings, &session, &dbg_client,
-                                              &target](const std::string& query) -> std::string
-        {
-            auto runtime_ctx = GatherRuntimeContext(dbg_client);
-            std::string error;
-            bool created = false;
-            if (!EnsureAgent(session, dbg_client, settings, target, runtime_ctx, &error, &created))
+            std::lock_guard<std::mutex> lock(http_state.mutex);
+            if (!http_server.is_running())
             {
-                return error.empty() ? "Failed to initialize agent" : error;
+                control->Output(DEBUG_OUTPUT_NORMAL, "HTTP server is not running.\n");
+            }
+            else
+            {
+                control->Output(DEBUG_OUTPUT_NORMAL, "HTTP server is running in background.\n");
+                if (!http_state.url.empty())
+                    control->Output(DEBUG_OUTPUT_NORMAL, "URL: %s\n", http_state.url.c_str());
+                if (!http_state.bind_addr.empty())
+                    control->Output(DEBUG_OUTPUT_NORMAL, "Bind address: %s\n",
+                                    http_state.bind_addr.c_str());
+            }
+        }
+        else if (rest == "stop")
+        {
+            if (!http_server.is_running())
+            {
+                control->Output(DEBUG_OUTPUT_NORMAL, "HTTP server is not running.\n");
+            }
+            else
+            {
+                control->Output(DEBUG_OUTPUT_NORMAL, "Stopping HTTP server...\n");
+                StopHTTPBackgroundServer();
+                control->Output(DEBUG_OUTPUT_NORMAL, "HTTP server stopped.\n");
+            }
+        }
+        else
+        {
+            // Start HTTP server for external tool integration
+            // Usage: !agent http [bind_addr]
+            // bind_addr: "127.0.0.1" (default, localhost only) or "0.0.0.0" (all interfaces)
+            auto dbg_client = CreatePersistentWinDbgClient(Client);
+            std::string target = dbg_client->GetTargetName();
+
+            // Parse optional bind address
+            std::string bind_addr = "127.0.0.1";
+            if (!rest.empty())
+            {
+                bind_addr = rest;
+                // Trim whitespace
+                size_t start = bind_addr.find_first_not_of(" \t");
+                size_t end = bind_addr.find_last_not_of(" \t");
+                if (start != std::string::npos)
+                    bind_addr = bind_addr.substr(start, end - start + 1);
             }
 
-            try
+            if (bind_addr != "127.0.0.1")
             {
-                std::string message =
-                    session.primed || session.system_prompt.empty()
-                        ? query
-                        : (session.system_prompt + "\n\n---\n\n" + query);
+                control->Output(DEBUG_OUTPUT_WARNING,
+                    "WARNING: Binding to non-loopback address '%s'. "
+                    "The server has no authentication.\n", bind_addr.c_str());
+            }
 
-                std::string response = session.agent->query_hosted(message, session.host);
-                session.primed = true;
+            // Get target state
+            std::string state = dbg_client->GetTargetState();
+            ULONG pid = dbg_client->GetProcessId();
+
+            // Create exec callback - executes debugger commands
+            windbg_agent::ExecCallback exec_cb = [dbg_client](const std::string& command)
+                -> std::string
+            {
+                return dbg_client->ExecuteCommand(command);
+            };
+
+            // Create ask callback - routes through same AI path as !agent ask
+            auto background_session = std::make_shared<AgentSession>();
+            windbg_agent::AskCallback ask_cb = [dbg_client, background_session](const std::string& query)
+                -> std::string
+            {
+                auto settings = windbg_agent::LoadSettings();
+                std::string target = dbg_client->GetTargetName();
+                auto runtime_ctx = GatherRuntimeContext(*dbg_client);
+                std::string error;
+                bool created = false;
+                if (!EnsureAgent(*background_session, *dbg_client, settings, target, runtime_ctx,
+                                 &error, &created))
+                {
+                    return error.empty() ? "Failed to initialize agent" : error;
+                }
+
+                try
+                {
+                    std::string message =
+                        background_session->primed || background_session->system_prompt.empty()
+                            ? query
+                            : (background_session->system_prompt + "\n\n---\n\n" + query);
+
+                    std::string response =
+                        background_session->agent->query_hosted(message, background_session->host);
+                    background_session->primed = true;
 
 #if !WINDBG_AGENT_DISABLE_SESSIONS
-                const auto* byok_save = settings.get_byok();
-                if (!(byok_save && byok_save->is_usable()))
-                {
-                    std::string new_session_id = session.agent->get_session_id();
-                    std::string provider_name =
-                        libagents::provider_type_name(settings.default_provider);
-                    if (!new_session_id.empty() && new_session_id != session.session_id)
+                    const auto* byok_save = settings.get_byok();
+                    if (!(byok_save && byok_save->is_usable()))
                     {
-                        windbg_agent::GetSessionStore().SetSessionId(target, provider_name,
-                                                                       new_session_id);
-                        session.session_id = new_session_id;
+                        std::string new_session_id = background_session->agent->get_session_id();
+                        std::string provider_name =
+                            libagents::provider_type_name(settings.default_provider);
+                        if (!new_session_id.empty() &&
+                            new_session_id != background_session->session_id)
+                        {
+                            windbg_agent::GetSessionStore().SetSessionId(target, provider_name,
+                                                                           new_session_id);
+                            background_session->session_id = new_session_id;
+                        }
                     }
-                }
 #endif
-                return response;
-            }
-            catch (const std::exception& e)
+                    return response;
+                }
+                catch (const std::exception& e)
+                {
+                    return std::string("Error: ") + e.what();
+                }
+            };
+
+            if (http_server.is_running())
             {
-                return std::string("Error: ") + e.what();
+                control->Output(DEBUG_OUTPUT_ERROR,
+                                "HTTP server already running. Stop it before starting a new one.\n");
+                control->Release();
+                return E_FAIL;
             }
-        };
 
-        // Start the HTTP server (OS assigns port)
-        static windbg_agent::HttpServer http_server;
-        if (http_server.is_running())
-        {
-            control->Output(DEBUG_OUTPUT_ERROR,
-                            "HTTP server already running. Stop it before starting a new one.\n");
-            control->Release();
-            return E_FAIL;
+            int actual_port = http_server.start(exec_cb, ask_cb, bind_addr);
+            if (actual_port <= 0)
+            {
+                control->Output(DEBUG_OUTPUT_ERROR, "Failed to start HTTP server.\n");
+                control->Release();
+                return E_FAIL;
+            }
+            std::string url =
+                "http://" + http_server.bind_addr() + ":" + std::to_string(http_server.port());
+
+            // Format and output HTTP server info
+            std::string http_info = windbg_agent::format_http_info(target, pid, state, url);
+            control->Output(DEBUG_OUTPUT_NORMAL, "%s\n", http_info.c_str());
+
+            // Copy to clipboard
+            if (windbg_agent::copy_to_clipboard(http_info))
+            {
+                control->Output(DEBUG_OUTPUT_NORMAL, "[Copied to clipboard]\n");
+            }
+
+            {
+                std::lock_guard<std::mutex> lock(http_state.mutex);
+                if (http_state.worker.joinable())
+                {
+                    control->Output(DEBUG_OUTPUT_ERROR,
+                                    "Internal error: stale HTTP worker thread is still active.\n");
+                    http_server.stop();
+                    control->Release();
+                    return E_FAIL;
+                }
+
+                http_state.dbg_client = dbg_client;
+                http_state.session = background_session;
+                http_state.bind_addr = bind_addr;
+                http_state.url = url;
+                http_state.worker = std::thread([]() { GetHTTPServer().wait(); });
+            }
+
+            http_server.set_interrupt_check(std::function<bool()>{});
+            control->Output(DEBUG_OUTPUT_NORMAL,
+                            "HTTP server is running in background. Use '!agent http stop' or /shutdown to stop it.\n");
         }
-        int actual_port = http_server.start(exec_cb, ask_cb, bind_addr);
-        if (actual_port <= 0)
-        {
-            control->Output(DEBUG_OUTPUT_ERROR,
-                            "Failed to start HTTP server.\n");
-            control->Release();
-            return E_FAIL;
-        }
-        std::string url = "http://" + http_server.bind_addr() + ":" + std::to_string(http_server.port());
-
-        // Format and output HTTP server info
-        std::string http_info =
-            windbg_agent::format_http_info(target, pid, state, url);
-        control->Output(DEBUG_OUTPUT_NORMAL, "%s\n", http_info.c_str());
-
-        // Copy to clipboard
-        if (windbg_agent::copy_to_clipboard(http_info))
-        {
-            control->Output(DEBUG_OUTPUT_NORMAL, "[Copied to clipboard]\n");
-        }
-
-        control->Output(DEBUG_OUTPUT_NORMAL, "Press Ctrl+C to stop HTTP server.\n");
-
-        // Set up interrupt check - stop server when user presses Ctrl+C
-        http_server.set_interrupt_check([&dbg_client]() {
-            return dbg_client.IsInterrupted();
-        });
-
-        // Block until server stops (user presses Ctrl+C or sends /shutdown)
-        http_server.wait();
-        control->Output(DEBUG_OUTPUT_NORMAL, "HTTP server stopped.\n");
     }
     else if (subcmd == "mcp")
     {
-        // Start MCP server for MCP-compatible clients
-        // Usage: !agent mcp [bind_addr]
-        // bind_addr: "127.0.0.1" (default, localhost only) or "0.0.0.0" (all interfaces)
-        windbg_agent::WinDbgClient dbg_client(Client);
-        auto settings = windbg_agent::LoadSettings();
-        auto& session = GetAgentSession();
-        std::string target = dbg_client.GetTargetName();
+        CleanupStoppedMCPWorker();
 
-        // Parse optional bind address
-        std::string bind_addr = "127.0.0.1";
-        if (!rest.empty())
+        auto& mcp_server = GetMCPServer();
+        auto& mcp_state = GetMCPBackgroundState();
+
+        if (rest == "status")
         {
-            bind_addr = rest;
-            size_t start = bind_addr.find_first_not_of(" \t");
-            size_t end = bind_addr.find_last_not_of(" \t");
-            if (start != std::string::npos)
-                bind_addr = bind_addr.substr(start, end - start + 1);
-        }
-
-        if (bind_addr != "127.0.0.1")
-        {
-            control->Output(DEBUG_OUTPUT_WARNING,
-                "WARNING: Binding to non-loopback address '%s'. "
-                "The server has no authentication.\n", bind_addr.c_str());
-        }
-
-        // Port 0 lets the MCP server pick a free port
-        int port = 0;
-        std::string url;
-
-        // Get target state
-        std::string state = dbg_client.GetTargetState();
-        ULONG pid = dbg_client.GetProcessId();
-
-        // Create exec callback - executes debugger commands
-        windbg_agent::ExecCallback exec_cb = [&dbg_client](const std::string& command) -> std::string
-        {
-            return dbg_client.ExecuteCommand(command);
-        };
-
-        // Create ask callback - routes through same AI path as !agent ask
-        windbg_agent::AskCallback ask_cb = [Client, &settings, &session, &dbg_client,
-                                              &target](const std::string& query) -> std::string
-        {
-            auto runtime_ctx = GatherRuntimeContext(dbg_client);
-            std::string error;
-            bool created = false;
-            if (!EnsureAgent(session, dbg_client, settings, target, runtime_ctx, &error, &created))
+            std::lock_guard<std::mutex> lock(mcp_state.mutex);
+            if (!mcp_server.is_running())
             {
-                return error.empty() ? "Failed to initialize agent" : error;
+                control->Output(DEBUG_OUTPUT_NORMAL, "MCP server is not running.\n");
+            }
+            else
+            {
+                control->Output(DEBUG_OUTPUT_NORMAL, "MCP server is running in background.\n");
+                if (!mcp_state.url.empty())
+                    control->Output(DEBUG_OUTPUT_NORMAL, "URL: %s\n", mcp_state.url.c_str());
+                if (!mcp_state.bind_addr.empty())
+                    control->Output(DEBUG_OUTPUT_NORMAL, "Bind address: %s\n",
+                                    mcp_state.bind_addr.c_str());
+            }
+        }
+        else if (rest == "stop")
+        {
+            if (!mcp_server.is_running())
+            {
+                control->Output(DEBUG_OUTPUT_NORMAL, "MCP server is not running.\n");
+            }
+            else
+            {
+                control->Output(DEBUG_OUTPUT_NORMAL, "Stopping MCP server...\n");
+                StopMCPBackgroundServer();
+                control->Output(DEBUG_OUTPUT_NORMAL, "MCP server stopped.\n");
+            }
+        }
+        else
+        {
+            // Start MCP server for MCP-compatible clients
+            // Usage: !agent mcp [bind_addr]
+            // bind_addr: "127.0.0.1" (default, localhost only) or "0.0.0.0" (all interfaces)
+            auto dbg_client = CreatePersistentWinDbgClient(Client);
+            std::string target = dbg_client->GetTargetName();
+
+            // Parse optional bind address
+            std::string bind_addr = "127.0.0.1";
+            if (!rest.empty())
+            {
+                bind_addr = rest;
+                size_t start = bind_addr.find_first_not_of(" \t");
+                size_t end = bind_addr.find_last_not_of(" \t");
+                if (start != std::string::npos)
+                    bind_addr = bind_addr.substr(start, end - start + 1);
             }
 
-            try
+            if (bind_addr != "127.0.0.1")
             {
-                std::string message =
-                    session.primed || session.system_prompt.empty()
-                        ? query
-                        : (session.system_prompt + "\n\n---\n\n" + query);
+                control->Output(DEBUG_OUTPUT_WARNING,
+                    "WARNING: Binding to non-loopback address '%s'. "
+                    "The server has no authentication.\n", bind_addr.c_str());
+            }
 
-                std::string response = session.agent->query_hosted(message, session.host);
-                session.primed = true;
+            // Port 0 lets the MCP server pick a free port
+            int port = 0;
+            std::string url;
+
+            // Get target state
+            std::string state = dbg_client->GetTargetState();
+            ULONG pid = dbg_client->GetProcessId();
+
+            // Create exec callback - executes debugger commands
+            windbg_agent::ExecCallback exec_cb = [dbg_client](const std::string& command)
+                -> std::string
+            {
+                return dbg_client->ExecuteCommand(command);
+            };
+
+            // Create ask callback - routes through same AI path as !agent ask
+            auto background_session = std::make_shared<AgentSession>();
+            windbg_agent::AskCallback ask_cb = [dbg_client, background_session](const std::string& query)
+                -> std::string
+            {
+                auto settings = windbg_agent::LoadSettings();
+                std::string target = dbg_client->GetTargetName();
+                auto runtime_ctx = GatherRuntimeContext(*dbg_client);
+                std::string error;
+                bool created = false;
+                if (!EnsureAgent(*background_session, *dbg_client, settings, target, runtime_ctx,
+                                 &error, &created))
+                {
+                    return error.empty() ? "Failed to initialize agent" : error;
+                }
+
+                try
+                {
+                    std::string message =
+                        background_session->primed || background_session->system_prompt.empty()
+                            ? query
+                            : (background_session->system_prompt + "\n\n---\n\n" + query);
+
+                    std::string response =
+                        background_session->agent->query_hosted(message, background_session->host);
+                    background_session->primed = true;
 
 #if !WINDBG_AGENT_DISABLE_SESSIONS
-                const auto* byok_save = settings.get_byok();
-                if (!(byok_save && byok_save->is_usable()))
-                {
-                    std::string new_session_id = session.agent->get_session_id();
-                    std::string provider_name =
-                        libagents::provider_type_name(settings.default_provider);
-                    if (!new_session_id.empty() && new_session_id != session.session_id)
+                    const auto* byok_save = settings.get_byok();
+                    if (!(byok_save && byok_save->is_usable()))
                     {
-                        windbg_agent::GetSessionStore().SetSessionId(target, provider_name,
-                                                                       new_session_id);
-                        session.session_id = new_session_id;
+                        std::string new_session_id = background_session->agent->get_session_id();
+                        std::string provider_name =
+                            libagents::provider_type_name(settings.default_provider);
+                        if (!new_session_id.empty() &&
+                            new_session_id != background_session->session_id)
+                        {
+                            windbg_agent::GetSessionStore().SetSessionId(target, provider_name,
+                                                                           new_session_id);
+                            background_session->session_id = new_session_id;
+                        }
                     }
-                }
 #endif
-                return response;
-            }
-            catch (const std::exception& e)
+                    return response;
+                }
+                catch (const std::exception& e)
+                {
+                    return std::string("Error: ") + e.what();
+                }
+            };
+
+            if (mcp_server.is_running())
             {
-                return std::string("Error: ") + e.what();
+                control->Output(DEBUG_OUTPUT_ERROR,
+                                "MCP server already running. Stop it before starting a new one.\n");
+                control->Release();
+                return E_FAIL;
             }
-        };
 
-        // Start the MCP server
-        static windbg_agent::MCPServer mcp_server;
-        if (mcp_server.is_running())
-        {
-            control->Output(DEBUG_OUTPUT_ERROR,
-                            "MCP server already running. Stop it before starting a new one.\n");
-            control->Release();
-            return E_FAIL;
+            int actual_port = mcp_server.start(port, exec_cb, ask_cb, bind_addr);
+            if (actual_port <= 0)
+            {
+                control->Output(DEBUG_OUTPUT_ERROR, "Failed to start MCP server.\n");
+                control->Release();
+                return E_FAIL;
+            }
+            url = "http://" + bind_addr + ":" + std::to_string(actual_port);
+
+            // Format and output MCP server info
+            std::string mcp_info = windbg_agent::format_mcp_info(target, pid, state, url);
+            control->Output(DEBUG_OUTPUT_NORMAL, "%s\n", mcp_info.c_str());
+
+            // Copy to clipboard
+            if (windbg_agent::copy_to_clipboard(mcp_info))
+            {
+                control->Output(DEBUG_OUTPUT_NORMAL, "[Copied to clipboard]\n");
+            }
+
+            {
+                std::lock_guard<std::mutex> lock(mcp_state.mutex);
+                if (mcp_state.worker.joinable())
+                {
+                    control->Output(DEBUG_OUTPUT_ERROR,
+                                    "Internal error: stale MCP worker thread is still active.\n");
+                    mcp_server.stop();
+                    control->Release();
+                    return E_FAIL;
+                }
+
+                mcp_state.dbg_client = dbg_client;
+                mcp_state.session = background_session;
+                mcp_state.bind_addr = bind_addr;
+                mcp_state.url = url;
+                mcp_state.worker = std::thread([]() { GetMCPServer().wait(); });
+            }
+
+            mcp_server.set_interrupt_check(std::function<bool()>{});
+            control->Output(DEBUG_OUTPUT_NORMAL,
+                            "MCP server is running in background. Use '!agent mcp stop' to stop it.\n");
         }
-        int actual_port = mcp_server.start(port, exec_cb, ask_cb, bind_addr);
-        if (actual_port <= 0)
-        {
-            control->Output(DEBUG_OUTPUT_ERROR,
-                            "Failed to start MCP server.\n");
-            control->Release();
-            return E_FAIL;
-        }
-        url = "http://" + bind_addr + ":" + std::to_string(actual_port);
-
-        // Format and output MCP server info
-        std::string mcp_info =
-            windbg_agent::format_mcp_info(target, pid, state, url);
-        control->Output(DEBUG_OUTPUT_NORMAL, "%s\n", mcp_info.c_str());
-
-        // Copy to clipboard
-        if (windbg_agent::copy_to_clipboard(mcp_info))
-        {
-            control->Output(DEBUG_OUTPUT_NORMAL, "[Copied to clipboard]\n");
-        }
-
-        control->Output(DEBUG_OUTPUT_NORMAL, "Press Ctrl+C to stop MCP server.\n");
-
-        // Set up interrupt check - stop MCP server when user presses Ctrl+C
-        mcp_server.set_interrupt_check([&dbg_client]() {
-            return dbg_client.IsInterrupted();
-        });
-
-        // Block until server stops (user presses Ctrl+C)
-        mcp_server.wait();
-        control->Output(DEBUG_OUTPUT_NORMAL, "MCP server stopped.\n");
     }
     else if (subcmd == "ask")
     {
