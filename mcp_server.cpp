@@ -194,7 +194,7 @@ int MCPServer::start(int port, ExecCallback exec_cb, AskCallback ask_cb,
         return -1;
     }
 
-    port_ = port;
+    port_ = impl_->server->port();  // read actual bound port (supports port 0 / OS auto-assign)
     running_.store(true);
 
     return port_;
