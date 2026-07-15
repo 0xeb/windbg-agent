@@ -1,4 +1,3 @@
-[submodule "external/libagents"]
-	path = external/libagents
-	url = https://github.com/0xeb/libagents.git
-	ignore = dirty
+[submodule "external/fastmcpp"]
+	path = external/fastmcpp
+	url = https://github.com/0xeb/fastmcpp.git

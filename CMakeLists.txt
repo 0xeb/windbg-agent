@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(windbg_agent VERSION 1.0.5 LANGUAGES CXX)
+project(windbg_agent VERSION 1.0.6 LANGUAGES CXX)
 
 # Generate version.h from template — single source of truth for version numbers
 configure_file(version.h.in "${CMAKE_CURRENT_BINARY_DIR}/version.h" @ONLY)
@@ -19,12 +19,13 @@ if(NOT WIN32)
     return()
 endif()
 
-# Add libagents if building standalone (not part of monorepo)
-# EXCLUDE_FROM_ALL: we only need fastmcpp_core from this tree; skip building
-# claude_sdk, copilot_sdk_cpp, libagents CLIs/examples which windbg_agent does
-# not link against.
-if(NOT TARGET libagents)
-    add_subdirectory(external/libagents EXCLUDE_FROM_ALL)
+# Add fastmcpp if building standalone (not part of monorepo)
+# EXCLUDE_FROM_ALL: we only link fastmcpp_core; skip building fastmcpp's own
+# CLI/examples/tests which windbg_agent does not use.
+if(NOT TARGET fastmcpp_core)
+    set(FASTMCPP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(FASTMCPP_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    add_subdirectory(external/fastmcpp EXCLUDE_FROM_ALL)
 endif()
 
 # Fetch cpp-httplib for HTTP server and CLI
@@ -50,10 +51,10 @@ add_library(windbg_agent SHARED
 # Module definition file: forces undecorated export names on Win32 (x86)
 target_sources(windbg_agent PRIVATE windbg_agent.def)
 
-# Link with libagents and Windows debugging libraries
+# Link with fastmcpp and Windows debugging libraries
 target_link_libraries(windbg_agent
     PRIVATE
-        fastmcpp_core     # MCP server library (via libagents/claude-agent-sdk-cpp)
+        fastmcpp_core     # MCP server library
         dbgeng            # Debugging Engine API
         dbghelp           # Debug Help Library
         ws2_32            # Winsock for HTTP server
@@ -103,7 +104,7 @@ if(BUILD_CLI)
         ${CMAKE_CURRENT_BINARY_DIR}
     )
 
-    # nlohmann_json comes via libagents subdirectory (fetched there)
+    # nlohmann_json comes via fastmcpp subdirectory (fetched there, exposed PUBLIC)
     target_link_libraries(windbg_agent_cli PRIVATE
         nlohmann_json
         ws2_32
